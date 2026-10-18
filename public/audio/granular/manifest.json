@@ -1,0 +1,143 @@
+{
+  "version": "2.0.0",
+  "category": "granular",
+  "description": "Synhale 2 Granular Acoustic Sample Manifest",
+  "samples": [
+    {
+      "file": "handpan_ding_d3.mp3",
+      "slot": "handpan",
+      "name": "手碟原声",
+      "category": "Acoustic",
+      "source": "network_recording",
+      "status": "recommended"
+    },
+    {
+      "file": "handpan_hang_drum.mp3",
+      "slot": "handpan_full",
+      "name": "手碟全曲",
+      "category": "Acoustic",
+      "source": "wikimedia_cc",
+      "status": "candidate"
+    },
+    {
+      "file": "kalimba_pluck.mp3",
+      "slot": "kalimba",
+      "name": "卡林巴单音",
+      "category": "Acoustic",
+      "source": "wikimedia_cc",
+      "status": "recommended"
+    },
+    {
+      "file": "kalimba_sample.mp3",
+      "slot": "kalimba_full",
+      "name": "卡林巴长采样",
+      "category": "Acoustic",
+      "source": "wikimedia_cc",
+      "status": "candidate"
+    },
+    {
+      "file": "cello_bowed_c3.mp3",
+      "slot": "celloPad",
+      "name": "大提琴弦 C3",
+      "category": "Acoustic",
+      "source": "tonejs_instruments",
+      "status": "recommended"
+    },
+    {
+      "file": "cello_bowed_c4.mp3",
+      "slot": "celloPad_c4",
+      "name": "大提琴弦 C4",
+      "category": "Acoustic",
+      "source": "tonejs_instruments",
+      "status": "candidate"
+    },
+    {
+      "file": "tibetan_ceremony_gong.mp3",
+      "slot": "tibetanGong",
+      "name": "西藏大锣",
+      "category": "Temple",
+      "source": "wikimedia_cc0",
+      "status": "recommended"
+    },
+    {
+      "file": "tibetan_vibrant_gong.mp3",
+      "slot": "tibetanGong_long",
+      "name": "长共振铜锣",
+      "category": "Temple",
+      "source": "wikimedia_cc",
+      "status": "candidate"
+    },
+    {
+      "file": "singing_bowl_strike.mp3",
+      "slot": "singingBowl_strike",
+      "name": "颂钵单击",
+      "category": "Temple",
+      "source": "wikimedia_cc",
+      "status": "recommended"
+    },
+    {
+      "file": "meditation_bell.mp3",
+      "slot": "meditationBell",
+      "name": "空灵磬钟",
+      "category": "Temple",
+      "source": "unpacked_sounds",
+      "status": "recommended"
+    },
+    {
+      "file": "ocean_tide.mp3",
+      "slot": "oceanTide",
+      "name": "深海潮汐",
+      "category": "Nature",
+      "source": "unpacked_sounds",
+      "status": "recommended"
+    },
+    {
+      "file": "forest_rain.mp3",
+      "slot": "forestRain",
+      "name": "森林细雨",
+      "category": "Nature",
+      "source": "unpacked_sounds",
+      "status": "recommended"
+    },
+    {
+      "file": "wind_breeze.mp3",
+      "slot": "windBreeze",
+      "name": "松涛微风",
+      "category": "Nature",
+      "source": "unpacked_sounds",
+      "status": "recommended"
+    },
+    {
+      "file": "singing_forest.mp3",
+      "slot": "singingForest",
+      "name": "林海幽谷",
+      "category": "Nature",
+      "source": "unpacked_sounds",
+      "status": "recommended"
+    },
+    {
+      "file": "whale_song.mp3",
+      "slot": "whaleSong",
+      "name": "深海鲸鸣",
+      "category": "Nature",
+      "source": "unpacked_sounds",
+      "status": "recommended"
+    },
+    {
+      "file": "shimmer_drone.mp3",
+      "slot": "shimmerCloud",
+      "name": "流光云垫",
+      "category": "Synthetic",
+      "source": "unpacked_sounds",
+      "status": "recommended"
+    },
+    {
+      "file": "modular_sub.mp3",
+      "slot": "modularSubDrone",
+      "name": "深渊次低音",
+      "category": "Synthetic",
+      "source": "unpacked_sounds",
+      "status": "recommended"
+    }
+  ]
+}

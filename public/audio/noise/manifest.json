@@ -1,0 +1,63 @@
+{
+  "version": "2.0.0",
+  "category": "noise",
+  "description": "Synhale 2 OSC B Real Noise Recordings Manifest",
+  "samples": [
+    {
+      "file": "white_noise.mp3",
+      "noiseType": "white",
+      "name": "标准白噪音",
+      "source": "unpacked_sounds",
+      "status": "core"
+    },
+    {
+      "file": "pink_noise.mp3",
+      "noiseType": "pink",
+      "name": "标准粉红噪音",
+      "source": "unpacked_sounds",
+      "status": "core"
+    },
+    {
+      "file": "brown_noise.mp3",
+      "noiseType": "brown",
+      "name": "标准布朗/红噪音",
+      "source": "unpacked_sounds",
+      "status": "core"
+    },
+    {
+      "file": "violet_noise.mp3",
+      "noiseType": "violet",
+      "name": "高频紫罗兰噪音",
+      "source": "wikimedia_cc",
+      "status": "core"
+    },
+    {
+      "file": "blue_noise.mp3",
+      "noiseType": "blue",
+      "name": "细腻天蓝噪音",
+      "source": "wikimedia_cc",
+      "status": "candidate"
+    },
+    {
+      "file": "airflow_breeze.mp3",
+      "noiseType": "air",
+      "name": "原野微风气流噪",
+      "source": "unpacked_sounds",
+      "status": "candidate"
+    },
+    {
+      "file": "home_fan.mp3",
+      "noiseType": "fan",
+      "name": "居室空气循环扇白噪",
+      "source": "unpacked_sounds",
+      "status": "candidate"
+    },
+    {
+      "file": "mechanical_hiss.mp3",
+      "noiseType": "hiss",
+      "name": "高流量吸气摩擦噪",
+      "source": "unpacked_sounds",
+      "status": "candidate"
+    }
+  ]
+}

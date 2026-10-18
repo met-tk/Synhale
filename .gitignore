@@ -1,0 +1,9 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+.agents/
+scratch/
+release/
+.DS_Store
+Thumbs.db

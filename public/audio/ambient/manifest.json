@@ -1,0 +1,746 @@
+{
+  "ocean": [
+    {
+      "file": "allyinnature-running-stream-water-sound-239612.mp3",
+      "category": "ocean",
+      "path": "audio/ambient/ocean/allyinnature-running-stream-water-sound-239612.mp3",
+      "size": 1801197
+    },
+    {
+      "file": "dragon-studio-water-dripping-364450.mp3",
+      "category": "ocean",
+      "path": "audio/ambient/ocean/dragon-studio-water-dripping-364450.mp3",
+      "size": 531117
+    },
+    {
+      "file": "liecio-water-bubbles-257594.mp3",
+      "category": "ocean",
+      "path": "audio/ambient/ocean/liecio-water-bubbles-257594.mp3",
+      "size": 818541
+    },
+    {
+      "file": "soundeffect_sea_storm.mp3",
+      "category": "ocean",
+      "path": "audio/ambient/ocean/soundeffect_sea_storm.mp3",
+      "size": 1506285
+    },
+    {
+      "file": "soundeffect_wave1.mp3",
+      "category": "ocean",
+      "path": "audio/ambient/ocean/soundeffect_wave1.mp3",
+      "size": 759789
+    },
+    {
+      "file": "soundeffect_wave2.mp3",
+      "category": "ocean",
+      "path": "audio/ambient/ocean/soundeffect_wave2.mp3",
+      "size": 537453
+    },
+    {
+      "file": "soundreality-water-stream-river-360596.mp3",
+      "category": "ocean",
+      "path": "audio/ambient/ocean/soundreality-water-stream-river-360596.mp3",
+      "size": 1801197
+    },
+    {
+      "file": "summer_beach1.mp3",
+      "category": "ocean",
+      "path": "audio/ambient/ocean/summer_beach1.mp3",
+      "size": 1701576
+    },
+    {
+      "file": "virtocean_ocean.mp3",
+      "category": "ocean",
+      "path": "audio/ambient/ocean/virtocean_ocean.mp3",
+      "size": 1801197
+    },
+    {
+      "file": "waves_on_beach2.mp3",
+      "category": "ocean",
+      "path": "audio/ambient/ocean/waves_on_beach2.mp3",
+      "size": 1801224
+    }
+  ],
+  "rain": [
+    {
+      "file": "feedthestraycats-real-rain-sound-379215.mp3",
+      "category": "rain",
+      "path": "audio/ambient/rain/feedthestraycats-real-rain-sound-379215.mp3",
+      "size": 513837
+    },
+    {
+      "file": "gloomy_rainy_day.mp3",
+      "category": "rain",
+      "path": "audio/ambient/rain/gloomy_rainy_day.mp3",
+      "size": 1501704
+    },
+    {
+      "file": "liecio-calming-rain-257596.mp3",
+      "category": "rain",
+      "path": "audio/ambient/rain/liecio-calming-rain-257596.mp3",
+      "size": 1801197
+    },
+    {
+      "file": "light_rain_thunder1.mp3",
+      "category": "rain",
+      "path": "audio/ambient/rain/light_rain_thunder1.mp3",
+      "size": 1450440
+    },
+    {
+      "file": "rainfall_band.mp3",
+      "category": "rain",
+      "path": "audio/ambient/rain/rainfall_band.mp3",
+      "size": 1801224
+    },
+    {
+      "file": "shelter_from_rain1.mp3",
+      "category": "rain",
+      "path": "audio/ambient/rain/shelter_from_rain1.mp3",
+      "size": 1202184
+    },
+    {
+      "file": "shelter_from_rain2.mp3",
+      "category": "rain",
+      "path": "audio/ambient/rain/shelter_from_rain2.mp3",
+      "size": 820872
+    },
+    {
+      "file": "storm1.mp3",
+      "category": "rain",
+      "path": "audio/ambient/rain/storm1.mp3",
+      "size": 705096
+    },
+    {
+      "file": "thunder1.mp3",
+      "category": "rain",
+      "path": "audio/ambient/rain/thunder1.mp3",
+      "size": 617544
+    },
+    {
+      "file": "watch_raining.mp3",
+      "category": "rain",
+      "path": "audio/ambient/rain/watch_raining.mp3",
+      "size": 1801224
+    }
+  ],
+  "stream": [
+    {
+      "file": "Mt_stream.mp3",
+      "category": "stream",
+      "path": "audio/ambient/stream/Mt_stream.mp3",
+      "size": 328968
+    },
+    {
+      "file": "cave_stream1.mp3",
+      "category": "stream",
+      "path": "audio/ambient/stream/cave_stream1.mp3",
+      "size": 1278792
+    },
+    {
+      "file": "mountain_stream.mp3",
+      "category": "stream",
+      "path": "audio/ambient/stream/mountain_stream.mp3",
+      "size": 1594540
+    },
+    {
+      "file": "small_cave_stream.mp3",
+      "category": "stream",
+      "path": "audio/ambient/stream/small_cave_stream.mp3",
+      "size": 329544
+    },
+    {
+      "file": "small_waterfall.mp3",
+      "category": "stream",
+      "path": "audio/ambient/stream/small_waterfall.mp3",
+      "size": 1801224
+    },
+    {
+      "file": "soundeffect_cave1.mp3",
+      "category": "stream",
+      "path": "audio/ambient/stream/soundeffect_cave1.mp3",
+      "size": 1733995
+    },
+    {
+      "file": "soundeffect_creek1.mp3",
+      "category": "stream",
+      "path": "audio/ambient/stream/soundeffect_creek1.mp3",
+      "size": 1558701
+    },
+    {
+      "file": "spring_water_on_Mt2.mp3",
+      "category": "stream",
+      "path": "audio/ambient/stream/spring_water_on_Mt2.mp3",
+      "size": 1801224
+    },
+    {
+      "file": "stream1.mp3",
+      "category": "stream",
+      "path": "audio/ambient/stream/stream1.mp3",
+      "size": 1845000
+    },
+    {
+      "file": "stream2.mp3",
+      "category": "stream",
+      "path": "audio/ambient/stream/stream2.mp3",
+      "size": 1387080
+    }
+  ],
+  "wind": [
+    {
+      "file": "blizzard.mp3",
+      "category": "wind",
+      "path": "audio/ambient/wind/blizzard.mp3",
+      "size": 845164
+    },
+    {
+      "file": "flag_flutter.mp3",
+      "category": "wind",
+      "path": "audio/ambient/wind/flag_flutter.mp3",
+      "size": 312254
+    },
+    {
+      "file": "gale_blow_trees1.mp3",
+      "category": "wind",
+      "path": "audio/ambient/wind/gale_blow_trees1.mp3",
+      "size": 817416
+    },
+    {
+      "file": "grassland_wind1.mp3",
+      "category": "wind",
+      "path": "audio/ambient/wind/grassland_wind1.mp3",
+      "size": 735021
+    },
+    {
+      "file": "grassland_wind2.mp3",
+      "category": "wind",
+      "path": "audio/ambient/wind/grassland_wind2.mp3",
+      "size": 1801197
+    },
+    {
+      "file": "soundeffect_plants_swaying1.mp3",
+      "category": "wind",
+      "path": "audio/ambient/wind/soundeffect_plants_swaying1.mp3",
+      "size": 910891
+    },
+    {
+      "file": "storm_hit_window1.mp3",
+      "category": "wind",
+      "path": "audio/ambient/wind/storm_hit_window1.mp3",
+      "size": 1647432
+    },
+    {
+      "file": "storm_hit_window5.mp3",
+      "category": "wind",
+      "path": "audio/ambient/wind/storm_hit_window5.mp3",
+      "size": 1801224
+    },
+    {
+      "file": "strong_wind1.mp3",
+      "category": "wind",
+      "path": "audio/ambient/wind/strong_wind1.mp3",
+      "size": 641736
+    },
+    {
+      "file": "strong_wind2.mp3",
+      "category": "wind",
+      "path": "audio/ambient/wind/strong_wind2.mp3",
+      "size": 221832
+    }
+  ],
+  "fire": [
+    {
+      "file": "alexzavesa-bonfire-1-468364.mp3",
+      "category": "fire",
+      "path": "audio/ambient/fire/alexzavesa-bonfire-1-468364.mp3",
+      "size": 543213
+    },
+    {
+      "file": "capaholiczsfx-crackle-fireplace-campfire-402289.mp3",
+      "category": "fire",
+      "path": "audio/ambient/fire/capaholiczsfx-crackle-fireplace-campfire-402289.mp3",
+      "size": 1801197
+    },
+    {
+      "file": "king_of_the_christmas-fireplace-loop-original-noise-178209.mp3",
+      "category": "fire",
+      "path": "audio/ambient/fire/king_of_the_christmas-fireplace-loop-original-noise-178209.mp3",
+      "size": 1801197
+    },
+    {
+      "file": "restfuldreamingtunes-sounds-of-nature-the-sound-of-a-flame-burning-in-a-fireplace-273945.mp3",
+      "category": "fire",
+      "path": "audio/ambient/fire/restfuldreamingtunes-sounds-of-nature-the-sound-of-a-flame-burning-in-a-fireplace-273945.mp3",
+      "size": 1801197
+    },
+    {
+      "file": "rumbling_earth.mp3",
+      "category": "fire",
+      "path": "audio/ambient/fire/rumbling_earth.mp3",
+      "size": 481608
+    },
+    {
+      "file": "sand_flows.mp3",
+      "category": "fire",
+      "path": "audio/ambient/fire/sand_flows.mp3",
+      "size": 164859
+    },
+    {
+      "file": "soundeffect_fire1.mp3",
+      "category": "fire",
+      "path": "audio/ambient/fire/soundeffect_fire1.mp3",
+      "size": 1443691
+    },
+    {
+      "file": "soundreality-fire-relaxing-528619.mp3",
+      "category": "fire",
+      "path": "audio/ambient/fire/soundreality-fire-relaxing-528619.mp3",
+      "size": 1801197
+    },
+    {
+      "file": "soundsforyou-campfire-crackling-fireplace-sound-119594.mp3",
+      "category": "fire",
+      "path": "audio/ambient/fire/soundsforyou-campfire-crackling-fireplace-sound-119594.mp3",
+      "size": 1801197
+    },
+    {
+      "file": "u_d3475dm30o-fire-sound-222359.mp3",
+      "category": "fire",
+      "path": "audio/ambient/fire/u_d3475dm30o-fire-sound-222359.mp3",
+      "size": 1801197
+    }
+  ],
+  "bio": [
+    {
+      "file": "black_cicadas1.mp3",
+      "category": "bio",
+      "path": "audio/ambient/bio/black_cicadas1.mp3",
+      "size": 1859976
+    },
+    {
+      "file": "blue_rock_thrush.mp3",
+      "category": "bio",
+      "path": "audio/ambient/bio/blue_rock_thrush.mp3",
+      "size": 454536
+    },
+    {
+      "file": "fall_riverside_night2.mp3",
+      "category": "bio",
+      "path": "audio/ambient/bio/fall_riverside_night2.mp3",
+      "size": 1801224
+    },
+    {
+      "file": "frogs2.mp3",
+      "category": "bio",
+      "path": "audio/ambient/bio/frogs2.mp3",
+      "size": 885384
+    },
+    {
+      "file": "insects_sing_in_fall2.mp3",
+      "category": "bio",
+      "path": "audio/ambient/bio/insects_sing_in_fall2.mp3",
+      "size": 1267848
+    },
+    {
+      "file": "insects_sing_in_fall4.mp3",
+      "category": "bio",
+      "path": "audio/ambient/bio/insects_sing_in_fall4.mp3",
+      "size": 1801224
+    },
+    {
+      "file": "insects_sing_in_fall5.mp3",
+      "category": "bio",
+      "path": "audio/ambient/bio/insects_sing_in_fall5.mp3",
+      "size": 1269000
+    },
+    {
+      "file": "soundeffect_karuizawa_birds.mp3",
+      "category": "bio",
+      "path": "audio/ambient/bio/soundeffect_karuizawa_birds.mp3",
+      "size": 1801197
+    },
+    {
+      "file": "soundeffect_summer_country.mp3",
+      "category": "bio",
+      "path": "audio/ambient/bio/soundeffect_summer_country.mp3",
+      "size": 1600173
+    },
+    {
+      "file": "summer_mountains1.mp3",
+      "category": "bio",
+      "path": "audio/ambient/bio/summer_mountains1.mp3",
+      "size": 574344
+    }
+  ],
+  "mix1": [
+    {
+      "file": "mix_coastal_calm.mp3",
+      "category": "mix1",
+      "path": "audio/ambient/mix1/mix_coastal_calm.mp3",
+      "size": 577197
+    },
+    {
+      "file": "mix_cozy_fireplace.mp3",
+      "category": "mix1",
+      "path": "audio/ambient/mix1/mix_cozy_fireplace.mp3",
+      "size": 577197
+    },
+    {
+      "file": "mix_deep_forest.mp3",
+      "category": "mix1",
+      "path": "audio/ambient/mix1/mix_deep_forest.mp3",
+      "size": 577197
+    },
+    {
+      "file": "mix_rain_on_tent.mp3",
+      "category": "mix1",
+      "path": "audio/ambient/mix1/mix_rain_on_tent.mp3",
+      "size": 673389
+    },
+    {
+      "file": "mix_rainy_cafe.mp3",
+      "category": "mix1",
+      "path": "audio/ambient/mix1/mix_rainy_cafe.mp3",
+      "size": 577197
+    },
+    {
+      "file": "mix_sleepy_storm.mp3",
+      "category": "mix1",
+      "path": "audio/ambient/mix1/mix_sleepy_storm.mp3",
+      "size": 577197
+    },
+    {
+      "file": "mix_study_lofi.mp3",
+      "category": "mix1",
+      "path": "audio/ambient/mix1/mix_study_lofi.mp3",
+      "size": 577197
+    },
+    {
+      "file": "mix_underwater_abyss.mp3",
+      "category": "mix1",
+      "path": "audio/ambient/mix1/mix_underwater_abyss.mp3",
+      "size": 577197
+    },
+    {
+      "file": "mix_whale_dive.mp3",
+      "category": "mix1",
+      "path": "audio/ambient/mix1/mix_whale_dive.mp3",
+      "size": 577197
+    },
+    {
+      "file": "mix_zen_garden.mp3",
+      "category": "mix1",
+      "path": "audio/ambient/mix1/mix_zen_garden.mp3",
+      "size": 577197
+    }
+  ],
+  "mix2": [
+    {
+      "file": "mix_cabin_retreat.mp3",
+      "category": "mix2",
+      "path": "audio/ambient/mix2/mix_cabin_retreat.mp3",
+      "size": 577197
+    },
+    {
+      "file": "mix_desert_night.mp3",
+      "category": "mix2",
+      "path": "audio/ambient/mix2/mix_desert_night.mp3",
+      "size": 577197
+    },
+    {
+      "file": "mix_lakeside_dawn.mp3",
+      "category": "mix2",
+      "path": "audio/ambient/mix2/mix_lakeside_dawn.mp3",
+      "size": 577197
+    },
+    {
+      "file": "mix_midnight_jungle.mp3",
+      "category": "mix2",
+      "path": "audio/ambient/mix2/mix_midnight_jungle.mp3",
+      "size": 577197
+    },
+    {
+      "file": "mix_morning_meadow.mp3",
+      "category": "mix2",
+      "path": "audio/ambient/mix2/mix_morning_meadow.mp3",
+      "size": 577197
+    },
+    {
+      "file": "mix_night_garden.mp3",
+      "category": "mix2",
+      "path": "audio/ambient/mix2/mix_night_garden.mp3",
+      "size": 721197
+    },
+    {
+      "file": "mix_nordic_winter.mp3",
+      "category": "mix2",
+      "path": "audio/ambient/mix2/mix_nordic_winter.mp3",
+      "size": 577197
+    },
+    {
+      "file": "mix_ocean_flight.mp3",
+      "category": "mix2",
+      "path": "audio/ambient/mix2/mix_ocean_flight.mp3",
+      "size": 577197
+    },
+    {
+      "file": "mix_rainy_train.mp3",
+      "category": "mix2",
+      "path": "audio/ambient/mix2/mix_rainy_train.mp3",
+      "size": 577197
+    },
+    {
+      "file": "mix_sakura_garden.mp3",
+      "category": "mix2",
+      "path": "audio/ambient/mix2/mix_sakura_garden.mp3",
+      "size": 577197
+    }
+  ],
+  "birds": [
+    {
+      "file": "birdsong.mp3",
+      "category": "birds",
+      "path": "audio/ambient/birds/birdsong.mp3",
+      "size": 673389
+    },
+    {
+      "file": "cuckoo.mp3",
+      "category": "birds",
+      "path": "audio/ambient/birds/cuckoo.mp3",
+      "size": 481581
+    },
+    {
+      "file": "dawn_chorus.mp3",
+      "category": "birds",
+      "path": "audio/ambient/birds/dawn_chorus.mp3",
+      "size": 721197
+    },
+    {
+      "file": "dolphins.mp3",
+      "category": "birds",
+      "path": "audio/ambient/birds/dolphins.mp3",
+      "size": 577197
+    },
+    {
+      "file": "loon_calls.mp3",
+      "category": "birds",
+      "path": "audio/ambient/birds/loon_calls.mp3",
+      "size": 961389
+    },
+    {
+      "file": "nightingale.mp3",
+      "category": "birds",
+      "path": "audio/ambient/birds/nightingale.mp3",
+      "size": 721197
+    },
+    {
+      "file": "owl.mp3",
+      "category": "birds",
+      "path": "audio/ambient/birds/owl.mp3",
+      "size": 121581
+    },
+    {
+      "file": "parrots.mp3",
+      "category": "birds",
+      "path": "audio/ambient/birds/parrots.mp3",
+      "size": 673389
+    },
+    {
+      "file": "seagulls.mp3",
+      "category": "birds",
+      "path": "audio/ambient/birds/seagulls.mp3",
+      "size": 409581
+    },
+    {
+      "file": "whale_song.mp3",
+      "category": "birds",
+      "path": "audio/ambient/birds/whale_song.mp3",
+      "size": 721197
+    }
+  ],
+  "creatures": [
+    {
+      "file": "bees.mp3",
+      "category": "creatures",
+      "path": "audio/ambient/creatures/bees.mp3",
+      "size": 673389
+    },
+    {
+      "file": "cat_purr.mp3",
+      "category": "creatures",
+      "path": "audio/ambient/creatures/cat_purr.mp3",
+      "size": 135981
+    },
+    {
+      "file": "cicadas.mp3",
+      "category": "creatures",
+      "path": "audio/ambient/creatures/cicadas.mp3",
+      "size": 577197
+    },
+    {
+      "file": "crickets.mp3",
+      "category": "creatures",
+      "path": "audio/ambient/creatures/crickets.mp3",
+      "size": 193581
+    },
+    {
+      "file": "duck.mp3",
+      "category": "creatures",
+      "path": "audio/ambient/creatures/duck.mp3",
+      "size": 721197
+    },
+    {
+      "file": "frogs.mp3",
+      "category": "creatures",
+      "path": "audio/ambient/creatures/frogs.mp3",
+      "size": 577197
+    },
+    {
+      "file": "pigeons.mp3",
+      "category": "creatures",
+      "path": "audio/ambient/creatures/pigeons.mp3",
+      "size": 721197
+    },
+    {
+      "file": "rooster.mp3",
+      "category": "creatures",
+      "path": "audio/ambient/creatures/rooster.mp3",
+      "size": 577197
+    },
+    {
+      "file": "sparrows.mp3",
+      "category": "creatures",
+      "path": "audio/ambient/creatures/sparrows.mp3",
+      "size": 673389
+    },
+    {
+      "file": "wolf.mp3",
+      "category": "creatures",
+      "path": "audio/ambient/creatures/wolf.mp3",
+      "size": 159597
+    }
+  ],
+  "meditation": [
+    {
+      "file": "crystal_bowl.mp3",
+      "category": "meditation",
+      "path": "audio/ambient/meditation/crystal_bowl.mp3",
+      "size": 673389
+    },
+    {
+      "file": "flute.mp3",
+      "category": "meditation",
+      "path": "audio/ambient/meditation/flute.mp3",
+      "size": 409581
+    },
+    {
+      "file": "guitar.mp3",
+      "category": "meditation",
+      "path": "audio/ambient/meditation/guitar.mp3",
+      "size": 697581
+    },
+    {
+      "file": "harp.mp3",
+      "category": "meditation",
+      "path": "audio/ambient/meditation/harp.mp3",
+      "size": 433197
+    },
+    {
+      "file": "meditation_bell.mp3",
+      "category": "meditation",
+      "path": "audio/ambient/meditation/meditation_bell.mp3",
+      "size": 337581
+    },
+    {
+      "file": "music_box.mp3",
+      "category": "meditation",
+      "path": "audio/ambient/meditation/music_box.mp3",
+      "size": 673389
+    },
+    {
+      "file": "piano.mp3",
+      "category": "meditation",
+      "path": "audio/ambient/meditation/piano.mp3",
+      "size": 649197
+    },
+    {
+      "file": "singing_bowl.mp3",
+      "category": "meditation",
+      "path": "audio/ambient/meditation/singing_bowl.mp3",
+      "size": 913581
+    },
+    {
+      "file": "tibetan_bowl.mp3",
+      "category": "meditation",
+      "path": "audio/ambient/meditation/tibetan_bowl.mp3",
+      "size": 1316781
+    },
+    {
+      "file": "wind_chimes.mp3",
+      "category": "meditation",
+      "path": "audio/ambient/meditation/wind_chimes.mp3",
+      "size": 721197
+    }
+  ],
+  "urban": [
+    {
+      "file": "boat.mp3",
+      "category": "urban",
+      "path": "audio/ambient/urban/boat.mp3",
+      "size": 577197
+    },
+    {
+      "file": "city_ambiance.mp3",
+      "category": "urban",
+      "path": "audio/ambient/urban/city_ambiance.mp3",
+      "size": 673389
+    },
+    {
+      "file": "clock_tick.mp3",
+      "category": "urban",
+      "path": "audio/ambient/urban/clock_tick.mp3",
+      "size": 577197
+    },
+    {
+      "file": "coffee_shop.mp3",
+      "category": "urban",
+      "path": "audio/ambient/urban/coffee_shop.mp3",
+      "size": 721197
+    },
+    {
+      "file": "fan.mp3",
+      "category": "urban",
+      "path": "audio/ambient/urban/fan.mp3",
+      "size": 577197
+    },
+    {
+      "file": "metro.mp3",
+      "category": "urban",
+      "path": "audio/ambient/urban/metro.mp3",
+      "size": 673389
+    },
+    {
+      "file": "pink_noise.mp3",
+      "category": "urban",
+      "path": "audio/ambient/urban/pink_noise.mp3",
+      "size": 577197
+    },
+    {
+      "file": "train.mp3",
+      "category": "urban",
+      "path": "audio/ambient/urban/train.mp3",
+      "size": 673389
+    },
+    {
+      "file": "typing.mp3",
+      "category": "urban",
+      "path": "audio/ambient/urban/typing.mp3",
+      "size": 481581
+    },
+    {
+      "file": "white_noise.mp3",
+      "category": "urban",
+      "path": "audio/ambient/urban/white_noise.mp3",
+      "size": 577197
+    }
+  ]
+}
