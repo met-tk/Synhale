@@ -22,6 +22,26 @@ const pendingSampleFetches = new Map<string, Promise<AudioBuffer | null>>();
 
 // Shared fallback AudioContext singleton (avoid browser context limit)
 let sharedFallbackContext: AudioContext | null = null;
+const activeCueOutputs = new WeakMap<BaseAudioContext, Set<GainNode>>();
+
+function trackCueOutput(ctx: BaseAudioContext, gain: GainNode): void {
+  let outputs = activeCueOutputs.get(ctx);
+  if (!outputs) activeCueOutputs.set(ctx, outputs = new Set());
+  outputs.add(gain);
+}
+
+/** Include cues in transport pause without disabling settings auditions. */
+export function stopCueSounds(ctx?: BaseAudioContext | null): void {
+  if (!ctx) return;
+  const outputs = activeCueOutputs.get(ctx);
+  for (const gain of outputs ?? []) {
+    try {
+      gain.gain.cancelScheduledValues(ctx.currentTime);
+      gain.gain.setTargetAtTime(0, ctx.currentTime, 0.001);
+    } catch { /* Context may already be closed. */ }
+  }
+  outputs?.clear();
+}
 
 function getSharedContext(): AudioContext | null {
   if (typeof window === 'undefined') return null;
@@ -149,6 +169,7 @@ function playSingleOscFallback(
       gain.disconnect();
       filter.disconnect();
       masterGain.disconnect();
+      activeCueOutputs.get(ctx)?.delete(masterGain);
     } catch {}
   };
   osc.start(now);
@@ -167,6 +188,7 @@ function playSyntheticFallback(
   const masterGain = ctx.createGain();
   masterGain.gain.setValueAtTime(0.0001, now);
   masterGain.connect(ctx.destination);
+  trackCueOutput(ctx, masterGain);
 
   switch (preset) {
     case 'singingBowl': {
@@ -208,6 +230,7 @@ function playSyntheticFallback(
           gain2.disconnect();
           filter.disconnect();
           masterGain.disconnect();
+          activeCueOutputs.get(ctx)?.delete(masterGain);
         } catch {}
       };
       osc1.start(now);
@@ -300,11 +323,13 @@ function playBuffer(
 
   source.connect(gainNode);
   gainNode.connect(ctx.destination);
+  trackCueOutput(ctx, gainNode);
 
   source.onended = () => {
     try {
       source.disconnect();
       gainNode.disconnect();
+      activeCueOutputs.get(ctx)?.delete(gainNode);
     } catch {}
   };
   source.start(now);
@@ -322,12 +347,13 @@ export function playCueSound(
   volume = 0.35,
   externalCtx?: BaseAudioContext | null
 ): void {
+  if (!Number.isFinite(volume) || !Object.prototype.hasOwnProperty.call(CUE_PRESETS, preset)) return;
   const normVol = Math.max(0, Math.min(1, volume));
   if (normVol <= 0.001) return;
 
   try {
     const ctx = externalCtx || getSharedContext();
-    if (!ctx) return;
+    if (!ctx || ctx.state === 'closed') return;
 
     if (ctx.state === 'suspended' && 'resume' in ctx && typeof (ctx as any).resume === 'function') {
       (ctx as any).resume().catch(() => {});
@@ -344,24 +370,63 @@ export function playCueSound(
       // 1. Instant playback of cached authentic natural recording
       playBuffer(cachedBuffer, normVol, ctx);
     } else if (safeUrl && typeof fetch !== 'undefined') {
-      // 2. Pre-cache not ready yet: Fetch and decode real recording on the fly,
-      // and play it immediately without playing obsolete synthetic oscillator tones!
-      loadCueSampleBuffer(safeUrl, ctx)
-        .then(audioBuf => {
-          if (audioBuf) {
-            playBuffer(audioBuf, normVol, ctx);
-          } else {
-            playSyntheticFallback(preset, normVol, ctx);
-          }
-        })
-        .catch(() => {
-          playSyntheticFallback(preset, normVol, ctx);
-        });
+      // Play this transition on time. A slow fetch must not emit an obsolete
+      // cue after a later stage or after the user has paused playback.
+      playSyntheticFallback(preset, normVol, ctx);
+      void loadCueSampleBuffer(safeUrl, ctx);
     } else {
       // 3. Fallback for offline / headless test environments without fetch
       playSyntheticFallback(preset, normVol, ctx);
     }
   } catch {
     // Graceful fallback for headless or restricted environments
+  }
+}
+
+/**
+ * Play a cue sound, but wait for its natural sample to load first.
+ * Unlike playCueSound (which plays the synthetic fallback while the sample is
+ * still fetching), this is intended for user-triggered previews in the
+ * settings panel: the first click should already hear the authentic recording.
+ * If the sample fails to load, falls back to playCueSound's synthetic layer.
+ */
+export async function playCueSoundAsync(
+  preset: BreathCuePresetId,
+  volume = 0.35,
+  externalCtx?: BaseAudioContext | null
+): Promise<void> {
+  if (!Number.isFinite(volume) || !Object.prototype.hasOwnProperty.call(CUE_PRESETS, preset)) return;
+  const normVol = Math.max(0, Math.min(1, volume));
+  if (normVol <= 0.001) return;
+
+  try {
+    const ctx = externalCtx || getSharedContext();
+    if (!ctx || ctx.state === 'closed') return;
+    const sampleUrl = CUE_PRESETS[preset]?.sampleUrl;
+    const safeUrl = sampleUrl ? resolveSafeSampleUrl(sampleUrl) : null;
+    if (safeUrl && typeof fetch !== 'undefined') {
+      const buffer = await loadCueSampleBuffer(safeUrl, ctx);
+      if (buffer) {
+        playBuffer(buffer, normVol, ctx);
+        return;
+      }
+    }
+  } catch {
+    // fall through to synthetic fallback
+  }
+  playCueSound(preset, volume, externalCtx);
+}
+
+/**
+ * Releases cached cue sample AudioBuffers and closes the shared fallback
+ * AudioContext singleton. Called by AudioEngine.dispose() to prevent
+ * unbounded memory growth across engine recreations.
+ */
+export function clearCueSampleCache(): void {
+  sampleBufferCache.clear();
+  pendingSampleFetches.clear();
+  if (sharedFallbackContext) {
+    try { void sharedFallbackContext.close().catch(() => {}); } catch { /* already closed */ }
+    sharedFallbackContext = null;
   }
 }

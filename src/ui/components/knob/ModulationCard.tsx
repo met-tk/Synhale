@@ -2,6 +2,7 @@ import React, { useState, useEffect, useContext } from 'react';
 import { createPortal } from 'react-dom';
 import { X, Trash2, Check, Sliders, Activity, Wind, Waves, Compass, Clock, Maximize2 } from 'lucide-react';
 import { ThemeContext } from '../../theme/ThemeProvider';
+import { useModalDialog } from '../../hooks/useModalDialog';
 import type { ModulationRoute, ModulationSource, FullBreathCurveData } from '../../../types';
 import {
   createDefaultBreathCurveData,
@@ -10,6 +11,8 @@ import {
   createCurveDataFromMultipliers,
   extractStageMultipliersFromCurve
 } from '../../../audio/dsp/curveMath';
+import { polarToCartesian, describeArc } from './arcUtils';
+
 
 export interface ModulationCardProps {
   target: string;
@@ -29,26 +32,6 @@ export interface ModulationCardProps {
   isDark?: boolean;
 }
 
-function polarToCartesian(cx: number, cy: number, r: number, angleDeg: number) {
-  const rad = ((angleDeg - 90) * Math.PI) / 180.0;
-  return {
-    x: cx + r * Math.cos(rad),
-    y: cy + r * Math.sin(rad)
-  };
-}
-
-function describeArc(cx: number, cy: number, r: number, startAngle: number, endAngle: number) {
-  if (Math.abs(endAngle - startAngle) < 0.5) {
-    return '';
-  }
-  const actualStart = Math.min(startAngle, endAngle);
-  const actualEnd = Math.max(startAngle, endAngle);
-  const start = polarToCartesian(cx, cy, r, actualEnd);
-  const end = polarToCartesian(cx, cy, r, actualStart);
-  const largeArcFlag = actualEnd - actualStart <= 180 ? '0' : '1';
-  return `M ${start.x} ${start.y} A ${r} ${r} 0 ${largeArcFlag} 0 ${end.x} ${end.y}`;
-}
-
 interface SourceMeta {
   id: ModulationSource;
   label: string;
@@ -64,7 +47,7 @@ const BREATH_SOURCES: SourceMeta[] = [
     label: 'Breath Macro',
     nameZh: '呼吸宏',
     icon: Wind,
-    descZh: '随呼吸节律自动膨胀/收缩调制参数，吸气展开，呼气内敛。',
+    descZh: '随呼吸涨落，吸展呼敛',
     group: 'breath'
   },
   {
@@ -72,7 +55,7 @@ const BREATH_SOURCES: SourceMeta[] = [
     label: 'Stage Env',
     nameZh: '阶段包络',
     icon: Clock,
-    descZh: '按吸气、屏息、呼气、静息四阶段精准步进，赋予阶段专属动态。',
+    descZh: '四阶段步进动态',
     group: 'breath'
   }
 ];
@@ -83,7 +66,7 @@ const LFO_SOURCES: SourceMeta[] = [
     label: 'LFO 1',
     nameZh: '低频振荡 1',
     icon: Activity,
-    descZh: '周期性正弦微波震荡，适合产生柔和颤音（Vibrato）与音高微漂移。',
+    descZh: '正弦微波，柔颤与音高漂移',
     group: 'lfo'
   },
   {
@@ -91,7 +74,7 @@ const LFO_SOURCES: SourceMeta[] = [
     label: 'LFO 2',
     nameZh: '低频振荡 2',
     icon: Waves,
-    descZh: '超慢潮汐式律动，适合驱动滤波呼吸扫频与立体声双耳声场摇摆。',
+    descZh: '潮汐律动，扫频与声场摇摆',
     group: 'lfo'
   }
 ];
@@ -117,6 +100,7 @@ export const ModulationCard: React.FC<ModulationCardProps> = ({
 }) => {
   const themeCtx = useContext(ThemeContext);
   const isDark = propIsDark ?? themeCtx?.isDark ?? true;
+  const dialogRef = useModalDialog(isOpen, onClose);
 
   const [selectedSource, setSelectedSource] = useState<ModulationSource>(
     (route?.source && route.source !== 'manual')
@@ -175,28 +159,6 @@ export const ModulationCard: React.FC<ModulationCardProps> = ({
     frameId = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frameId);
   }, [isOpen, isPlaying]);
-
-  // Handle ESC key to close
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        onClose();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onClose]);
-
-  // Lock body scroll when modal is open to ensure pure viewport centering
-  useEffect(() => {
-    if (!isOpen || typeof document === 'undefined') return;
-    const originalOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.body.style.overflow = originalOverflow;
-    };
-  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -268,6 +230,9 @@ export const ModulationCard: React.FC<ModulationCardProps> = ({
   };
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.currentTarget.focus({ preventScroll: true });
     e.currentTarget.setPointerCapture(e.pointerId);
     updateDepthFromPointer(e.clientY, e.currentTarget.getBoundingClientRect());
   };
@@ -278,6 +243,7 @@ export const ModulationCard: React.FC<ModulationCardProps> = ({
   };
 
   const updateDepthFromPointer = (clientY: number, rect: DOMRect) => {
+    if (rect.height <= 0) return;
     const ratio = (clientY - rect.top) / rect.height; // 0 (top) .. 1 (bottom)
     const clamped = Math.max(0, Math.min(1, ratio));
     let rawDepth = 1.0 - clamped * 2.0; // +1.0 (top) .. -1.0 (bottom)
@@ -299,7 +265,7 @@ export const ModulationCard: React.FC<ModulationCardProps> = ({
     if (isBipolar) {
       return `[基准 - ${absDepthPct}%, 基准 + ${absDepthPct}%]`;
     }
-    // Unipolar
+    // 单向
     if (depth >= 0) {
       return `[基准, 基准 + ${absDepthPct}%]`;
     } else {
@@ -343,7 +309,7 @@ export const ModulationCard: React.FC<ModulationCardProps> = ({
             </div>
             <div className="flex-1 text-left">
               <div className="flex items-center justify-between text-[11px] font-mono text-sky-500 font-medium mb-1">
-                <span>呼吸潮汐 · {isPlaying ? '实时驱动' : '已暂停'}</span>
+                <span>{isPlaying ? '实时驱动' : '已暂停'}</span>
                 <span>{Math.round(breathFactor * 100)}%</span>
               </div>
               <div className={`w-full ${isDark ? 'bg-neutral-800' : 'bg-neutral-200'} h-1.5 rounded-full overflow-hidden`}>
@@ -407,7 +373,7 @@ export const ModulationCard: React.FC<ModulationCardProps> = ({
                 正弦周期震荡 · {lfo1Rate.toFixed(2)} Hz {isPlaying ? '' : '(已静止)'}
               </span>
               <p className={`text-[10px] ${isDark ? 'text-slate-400' : 'text-neutral-500'} leading-tight`}>
-                {isBipolar ? '双极性对称交流振荡 [-1.0, +1.0]' : '单极性直流偏置振荡 [0.0, +1.0]'}
+                {isBipolar ? '双极性 [-1, +1]' : '单极性 [0, +1]'}
               </p>
             </div>
           </div>
@@ -450,7 +416,7 @@ export const ModulationCard: React.FC<ModulationCardProps> = ({
                 双频潮汐扫频 · {lfo2Rate.toFixed(2)} Hz {isPlaying ? '' : '(已静止)'}
               </span>
               <p className={`text-[10px] ${isDark ? 'text-slate-400' : 'text-neutral-500'} leading-tight`}>
-                {isBipolar ? '双极性对称交流振荡 [-1.0, +1.0]' : '单极性直流偏置振荡 [0.0, +1.0]'}
+                {isBipolar ? '双极性 [-1, +1]' : '单极性 [0, +1]'}
               </p>
             </div>
           </div>
@@ -493,7 +459,7 @@ export const ModulationCard: React.FC<ModulationCardProps> = ({
                   ? 'border-neutral-800/90 bg-[#07090e] hover:border-sky-500/70 hover:shadow-[0_0_16px_rgba(56,189,248,0.12)]'
                   : 'border-neutral-300 bg-white hover:border-sky-400 hover:shadow-md'
               }`}
-              title="点击全景波形视窗进入独立包络工作台"
+              title="点击打开包络工作台"
             >
               {/* Top Viewport Header */}
               <div className={`flex items-center justify-between text-[10px] font-mono mb-2 px-1 ${
@@ -501,12 +467,12 @@ export const ModulationCard: React.FC<ModulationCardProps> = ({
               }`}>
                 <span className="flex items-center gap-1.5 text-sky-400 font-semibold uppercase tracking-wider">
                   <Clock size={12} strokeWidth={1.5} />
-                  <span>全呼吸阶段包络 · 连续全景视窗</span>
+                  <span>阶段包络全景</span>
                 </span>
                 <span className={`flex items-center gap-1 text-[9px] font-mono transition-colors ${
                   isDark ? 'text-sky-400/90 group-hover:text-sky-300' : 'text-sky-600 group-hover:text-sky-700'
                 }`}>
-                  <span>打开独立编辑器</span>
+                  <span>工作台</span>
                   <Maximize2 size={10} strokeWidth={1.5} className="group-hover:scale-110 transition-transform" />
                 </span>
               </div>
@@ -617,7 +583,7 @@ export const ModulationCard: React.FC<ModulationCardProps> = ({
                     isDark ? 'text-sky-200 bg-neutral-950/90 border-sky-500/50' : 'text-sky-900 bg-white/95 border-sky-300'
                   }`}>
                     <Maximize2 size={11} strokeWidth={1.5} className="text-sky-400" />
-                    <span>点击进入独立编辑器 · Open Studio MSEG</span>
+                    <span>进入工作台</span>
                   </span>
                 </div>
               </div>
@@ -638,7 +604,7 @@ export const ModulationCard: React.FC<ModulationCardProps> = ({
                 }`}
               >
                 <Maximize2 size={13} strokeWidth={1.5} className={isDark ? "text-sky-400" : "text-sky-600"} />
-                <span>打开独立包络工作台 · Open Studio MSEG</span>
+                <span>打开工作台</span>
               </button>
             )}
           </div>
@@ -656,7 +622,7 @@ export const ModulationCard: React.FC<ModulationCardProps> = ({
               <span className={`text-[11px] font-mono font-medium block mb-0.5 ${
                 isDark ? 'text-slate-300' : 'text-neutral-700'
               }`}>
-                物理位置直通 · Static Position
+                直通
               </span>
               <p className={`text-[10px] ${isDark ? 'text-slate-400' : 'text-neutral-500'} leading-tight`}>
                 {currentSourceMeta.descZh}
@@ -676,7 +642,10 @@ export const ModulationCard: React.FC<ModulationCardProps> = ({
       onClick={onClose}
     >
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         role="dialog"
+        aria-modal="true"
         aria-label={`Modulation assignment for ${targetLabel}`}
         className={`relative w-full max-w-2xl rounded-2xl border p-5 shadow-2xl my-auto ${
           isDark ? 'border-neutral-800 bg-neutral-950 text-slate-100' : 'border-neutral-200 bg-white text-neutral-900'
@@ -696,7 +665,7 @@ export const ModulationCard: React.FC<ModulationCardProps> = ({
                 {targetLabel}
               </h2>
               <span className={`text-[10px] ${isDark ? 'text-slate-400' : 'text-neutral-500'}`}>
-                调制源矩阵分配 · Route Assignment
+                调制源分配
               </span>
             </div>
           </div>
@@ -724,14 +693,14 @@ export const ModulationCard: React.FC<ModulationCardProps> = ({
           <span className={`text-[10px] uppercase tracking-wider font-medium block ${
             isDark ? 'text-slate-400' : 'text-neutral-500'
           }`}>
-            选择调制源 · Modulation Source
+            选择调制源
           </span>
 
           {/* Branch A & B: Breath Dynamic Group & Internal Synth LFO Group */}
           {[
             {
               key: 'breath',
-              title: '呼吸动态组 · Breath Dynamic Group',
+              title: '呼吸动态',
               headerColor: 'text-sky-400',
               HeaderIcon: Wind,
               sources: BREATH_SOURCES,
@@ -741,7 +710,7 @@ export const ModulationCard: React.FC<ModulationCardProps> = ({
             },
             {
               key: 'lfo',
-              title: '合成器内部 LFO 组 · Internal Synth LFO',
+              title: '内部 LFO',
               headerColor: 'text-purple-400',
               HeaderIcon: Activity,
               sources: LFO_SOURCES,
@@ -790,7 +759,7 @@ export const ModulationCard: React.FC<ModulationCardProps> = ({
           <span className={`text-[10px] uppercase tracking-wider font-medium block mb-1.5 ${
             isDark ? 'text-slate-400' : 'text-neutral-500'
           }`}>
-            动态物理波形预览 · Live Waveform Preview
+            波形预览
           </span>
           {renderSourceGraphic()}
         </div>
@@ -810,8 +779,8 @@ export const ModulationCard: React.FC<ModulationCardProps> = ({
               isDark ? 'text-slate-400' : 'text-neutral-500'
             }`}>
               {selectedSource === 'stageProgress'
-                ? '目标控制与垂直阶段总控推子 · Target & Stage Depth'
-                : '目标控制与垂直调制强度推子 · Target & Depth Fader'}
+                ? '阶段总控'
+                : '调制强度'}
             </span>
             <span className={`font-mono tabular-nums text-xs font-semibold px-2 py-0.5 rounded border shadow-sm ${
               isDark
@@ -945,12 +914,12 @@ export const ModulationCard: React.FC<ModulationCardProps> = ({
                 <span className={`text-[11px] font-semibold block truncate ${
                   isDark ? 'text-slate-200' : 'text-neutral-800'
                 }`} title={targetLabel}>
-                  控制旋钮大样
+                  控制旋钮
                 </span>
                 <span className={`text-[9px] font-mono block ${
                   isDark ? 'text-slate-400' : 'text-neutral-500'
                 }`}>
-                  {isPlaying ? '实时调制运作中' : '调制待命状态'}
+                  {isPlaying ? '调制中' : '待命'}
                 </span>
               </div>
             </div>
@@ -959,13 +928,32 @@ export const ModulationCard: React.FC<ModulationCardProps> = ({
             <div className="flex items-center gap-2.5">
               {/* Vertical Fader Track */}
               <div
+                role="slider"
+                tabIndex={0}
+                aria-label="调制强度"
+                aria-orientation="vertical"
+                aria-valuemin={-1}
+                aria-valuemax={1}
+                aria-valuenow={depth}
+                aria-valuetext={depthDisplay}
                 className={`relative w-7 h-36 rounded-md cursor-ns-resize select-none overflow-hidden touch-none flex items-center justify-center shadow-inner ${
                   isDark ? 'bg-neutral-950 border border-neutral-800' : 'bg-neutral-200/90 border border-neutral-300'
                 }`}
                 onPointerDown={handlePointerDown}
                 onPointerMove={handlePointerMove}
                 onDoubleClick={() => setDepth(0.0)}
-                title="垂直拖动调节调制强度 (-100% ~ +100%)，双击中点快速归零"
+                onKeyDown={e => {
+                  const step = e.shiftKey ? 0.1 : 0.01;
+                  let next = depth;
+                  if (e.key === 'ArrowUp' || e.key === 'ArrowRight') next += step;
+                  else if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') next -= step;
+                  else if (e.key === 'Home') next = -1;
+                  else if (e.key === 'End') next = 1;
+                  else return;
+                  e.preventDefault();
+                  setDepth(Math.max(-1, Math.min(1, Math.round(next * 100) / 100)));
+                }}
+                title="垂直拖动调强度，双击归零"
               >
                 {/* Center Zero Horizon Guide Line */}
                 <div className={`absolute top-1/2 left-0 right-0 h-[1.5px] z-0 pointer-events-none ${
@@ -1073,10 +1061,10 @@ export const ModulationCard: React.FC<ModulationCardProps> = ({
             }`}>
               <div className="flex items-center gap-1.5 font-mono text-sky-500 font-medium mb-1">
                 <span className="w-1.5 h-1.5 rounded-full bg-sky-500" />
-                <span>四阶段总控深度作用机制：</span>
+                <span>作用机制</span>
               </div>
               <p className={`${isDark ? 'text-slate-400' : 'text-neutral-600'} mb-1`}>
-                上方四阶段包络确定呼吸各时期的相对形态（0% ~ 100%）。垂直推子决定包络峰值对目标旋钮的最大作用量（设为 0 时无调制；设为 +100% 时包络为 0 即完全静音；设为负值可反相抑制）。
+                包络定各阶段形态，推子定峰值强度；负值反相，0% 静音。
               </p>
               <div className={`font-mono text-[9px] px-1.5 py-0.5 rounded border ${
                 isDark ? 'text-sky-300/90 bg-neutral-900 border-neutral-800/60' : 'text-sky-700 bg-sky-50 border-sky-200'
@@ -1110,7 +1098,7 @@ export const ModulationCard: React.FC<ModulationCardProps> = ({
                       : 'border-neutral-300 bg-white text-neutral-600')
               }`}
             >
-              {isBipolar ? 'Bidirectional' : 'Unipolar'}
+              {isBipolar ? '双向' : '单向'}
             </button>
           </div>
 
@@ -1142,7 +1130,7 @@ export const ModulationCard: React.FC<ModulationCardProps> = ({
               }`}
             >
               <Trash2 size={13} strokeWidth={1.5} />
-              <span>Unassign</span>
+              <span>取消分配</span>
             </button>
           ) : (
             <div />
@@ -1157,7 +1145,7 @@ export const ModulationCard: React.FC<ModulationCardProps> = ({
                   : 'text-neutral-600 hover:text-neutral-900 border-neutral-200 hover:border-neutral-300 hover:bg-neutral-100'
               }`}
             >
-              Cancel
+              取消
             </button>
             <button
               type="button"
@@ -1165,7 +1153,7 @@ export const ModulationCard: React.FC<ModulationCardProps> = ({
               className="flex items-center gap-1.5 text-xs font-semibold text-slate-950 bg-violet-400 hover:bg-violet-300 py-1.5 px-4 rounded-lg shadow-sm transition-colors"
             >
               <Check size={14} strokeWidth={2} />
-              <span>Assign</span>
+              <span>分配</span>
             </button>
           </div>
         </div>

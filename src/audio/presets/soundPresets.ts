@@ -68,7 +68,7 @@ export const SOUND_PRESETS: Record<string, SoundPreset> = {
     name: '神圣钟磬',
     nameEn: 'Sacred Bell Resonance',
     category: 'Tibetan',
-    description: '432Hz 颂钵次谐波基底，纯铜共鸣与悠远磬鸣，伴随深邃寺庙殿堂漫长空间回响',
+    description: '432Hz 颂钵磬鸣，殿堂深响',
     badge: 'Sacred Bell',
     channelStrip: {
       oscA: {
@@ -196,7 +196,7 @@ export const SOUND_PRESETS: Record<string, SoundPreset> = {
     name: '深海潮汐',
     nameEn: 'Oceanic Drift',
     category: 'Nature',
-    description: '144Hz 柔和深海正弦与有机潮汐水汽，次低音缓慢漂移与潮水节律涨落',
+    description: '144Hz 深海正弦，潮汐涨落',
     badge: 'Tidal Flow',
     channelStrip: {
       oscA: {
@@ -324,7 +324,7 @@ export const SOUND_PRESETS: Record<string, SoundPreset> = {
     name: '极光以太',
     nameEn: 'Crystalline Shimmer Drone',
     category: 'Celestial',
-    description: '432Hz 结晶棱镜长鸣与柔和微光泛音颗粒，立体声空间漫游无刺耳尖峰',
+    description: '432Hz 结晶长鸣，微光泛音',
     badge: 'Shimmer Drone',
     channelStrip: {
       oscA: {
@@ -452,7 +452,7 @@ export const SOUND_PRESETS: Record<string, SoundPreset> = {
     name: '脑波深眠',
     nameEn: 'Deep Theta Sleep Harmonic',
     category: 'Theta',
-    description: '108Hz 温润纯正弦与温暖次低音，配合平缓粉红噪构建深度放松入眠场域',
+    description: '108Hz 正弦与粉噪，深眠场域',
     badge: 'Theta Slumber',
     channelStrip: {
       oscA: {
@@ -580,7 +580,7 @@ export const SOUND_PRESETS: Record<string, SoundPreset> = {
     name: '禅定古刹',
     nameEn: 'Ancient Bronze Chime',
     category: 'Zen',
-    description: '324Hz 古代青铜编钟泛音与丁夏铜铃回音，融合静谧竹风气流与长鸣空间',
+    description: '324Hz 青铜编钟，竹风静谧',
     badge: 'Bronze Chime',
     channelStrip: {
       oscA: {
@@ -710,7 +710,7 @@ export const EXTENDED_SOUND_PRESETS: Record<string, SoundPreset> = {
     name: '极光竖琴',
     nameEn: 'Ethereal Aurora Harp',
     category: 'Celestial',
-    description: '432Hz 极光天体竖琴与微光流云，晶莹竖琴拨弦与梦幻以太空间漫游',
+    description: '432Hz 天体竖琴，流云微光',
     badge: 'Aurora Harp',
     channelStrip: {
       oscA: {
@@ -838,7 +838,7 @@ export const EXTENDED_SOUND_PRESETS: Record<string, SoundPreset> = {
     name: '潮汐风铃',
     nameEn: 'Tidal Chimes Harmony',
     category: 'Nature',
-    description: '528Hz 奇迹转换音高，金属微粒与海洋潮水节律交织，带来身心净化感',
+    description: '528Hz 金属微粒与海潮交织',
     badge: 'Chime & Surf',
     channelStrip: {
       oscA: {
@@ -966,7 +966,7 @@ export const EXTENDED_SOUND_PRESETS: Record<string, SoundPreset> = {
     name: '竹林晨曦',
     nameEn: 'Forest Dawn Respiration',
     category: 'Organic',
-    description: '288Hz 自然竹笛谐波与清晨风吹林叶微粒，高频透亮空灵，深层缓解神经疲倦',
+    description: '288Hz 竹笛谐波，晨风拂叶',
     badge: 'Bamboo Breeze',
     channelStrip: {
       oscA: {
@@ -1094,7 +1094,7 @@ export const EXTENDED_SOUND_PRESETS: Record<string, SoundPreset> = {
     name: '碧涧流泉',
     nameEn: 'Forest Stream Harmony',
     category: 'Nature',
-    description: '528Hz 自然疗愈频率与空灵溪水流动微粒，清澈泉鸣与林间微风，滋养心神与内在安定',
+    description: '528Hz 溪泉流动，林间微风',
     badge: 'Forest Spring',
     channelStrip: {
       oscA: {
@@ -1222,7 +1222,7 @@ export const EXTENDED_SOUND_PRESETS: Record<string, SoundPreset> = {
     name: '梵音颂唱',
     nameEn: 'Celestial Choir Resonance',
     category: 'Celestial',
-    description: '216Hz 双重神圣八度谐波与空灵人声歌咏微粒，天体合唱般纯净庄严，引发深度静心与安详',
+    description: '216Hz 神圣八度，空灵人声',
     badge: 'Celestial Choir',
     channelStrip: {
       oscA: {
@@ -1350,7 +1350,7 @@ export const EXTENDED_SOUND_PRESETS: Record<string, SoundPreset> = {
     name: '水晶冰川',
     nameEn: 'Crystal Glacier Shimmer',
     category: 'Crystal',
-    description: '432Hz 水晶钵超高频结晶谐波与微粒霜花，极高通透感与纯净度，唤醒大脑清明敏锐',
+    description: '432Hz 水晶钵高频结晶谐波',
     badge: 'Crystal Frost',
     channelStrip: {
       oscA: {
@@ -1478,7 +1478,7 @@ export const EXTENDED_SOUND_PRESETS: Record<string, SoundPreset> = {
     name: '脉轮颂钵',
     nameEn: 'Chakra Tibetan Harmony',
     category: 'Tibetan',
-    description: '216Hz/432Hz 双重脉轮共鸣，传统手工藏钵微粒与深厚空间混响，贯通呼吸与能量流动',
+    description: '216/432Hz 双脉轮藏钵共鸣',
     badge: 'Chakra Bowl',
     channelStrip: {
       oscA: {
@@ -1609,7 +1609,7 @@ export const EXTENDED_SOUND_PRESETS: Record<string, SoundPreset> = {
     name: '深海远航',
     nameEn: 'Abyssal Voyage',
     category: 'Nature',
-    description: '108Hz 潜波次低音与大洋深处涌浪，多利亚调式水滴反向微粒与深海漫长回响',
+    description: '108Hz 潜波涌浪，深海回响',
     badge: 'Abyssal',
     channelStrip: {
       oscA: {
@@ -1742,7 +1742,7 @@ export const EXTENDED_SOUND_PRESETS: Record<string, SoundPreset> = {
     name: '雨夜苍穹',
     nameEn: 'Monsoon Canopy',
     category: 'Nature',
-    description: '288Hz 竹韵波表和弦与窗外倾盆暴雨，清脆水滴击打微粒与大教堂深远混响',
+    description: '288Hz 竹韵和弦与骤雨水滴',
     badge: 'Monsoon',
     channelStrip: {
       oscA: {
@@ -1875,7 +1875,7 @@ export const EXTENDED_SOUND_PRESETS: Record<string, SoundPreset> = {
     name: '幽涧清泉',
     nameEn: 'Mountain Cascade',
     category: 'Zen',
-    description: '324Hz 高山溪流与溶洞冷泉水韵，调式清亮微粒与开阔山谷回响',
+    description: '324Hz 高山溪流，山谷回响',
     badge: 'Cascade',
     channelStrip: {
       oscA: {
@@ -2008,7 +2008,7 @@ export const EXTENDED_SOUND_PRESETS: Record<string, SoundPreset> = {
     name: '极地风息',
     nameEn: 'Arctic Blizzard',
     category: 'Celestial',
-    description: '144Hz 极地正弦冰川厚重谐振与寒风呼啸，微光冰晶粒子与无限扩散混响',
+    description: '144Hz 冰川谐振与寒风冰晶',
     badge: 'Blizzard',
     channelStrip: {
       oscA: {
@@ -2141,7 +2141,7 @@ export const EXTENDED_SOUND_PRESETS: Record<string, SoundPreset> = {
     name: '古炉余温',
     nameEn: 'Hearth Embers',
     category: 'Organic',
-    description: '174Hz 舒缓根音与壁炉木柴低语爆裂，温润炭火热浪与亲密舒适房间回响',
+    description: '174Hz 壁炉木柴，温热低语',
     badge: 'Embers',
     channelStrip: {
       oscA: {
@@ -2274,7 +2274,7 @@ export const EXTENDED_SOUND_PRESETS: Record<string, SoundPreset> = {
     name: '原野暮色',
     nameEn: 'Wilderness Dusk',
     category: 'Organic',
-    description: '216Hz 黄昏和弦与原野夏夜促织，晚风拂叶与大地根音自然共鸣',
+    description: '216Hz 黄昏和弦，晚风促织',
     badge: 'Wilderness',
     channelStrip: {
       oscA: {
@@ -2407,7 +2407,7 @@ export const EXTENDED_SOUND_PRESETS: Record<string, SoundPreset> = {
     name: '枯山水庭',
     nameEn: 'Zen Garden',
     category: 'Zen',
-    description: '432Hz 神圣几何纯音与枯山水庭园清泉，石庭风铃与定心长鸣空间回响',
+    description: '432Hz 纯音清泉，石庭风铃',
     badge: 'Zen Stone',
     channelStrip: {
       oscA: {
@@ -2540,7 +2540,7 @@ export const EXTENDED_SOUND_PRESETS: Record<string, SoundPreset> = {
     name: '北欧谧舍',
     nameEn: 'Nordic Cabin',
     category: 'Cosmic',
-    description: '192Hz 温暖模拟纯音与林中小屋避世混音，温暖木屋原木声学地板低音',
+    description: '192Hz 温暖纯音，木屋低频',
     badge: 'Cabin',
     channelStrip: {
       oscA: {
@@ -2673,7 +2673,7 @@ export const EXTENDED_SOUND_PRESETS: Record<string, SoundPreset> = {
     name: '深海巨鲸',
     nameEn: 'Whale Sanctuary',
     category: 'Nature',
-    description: '72Hz 深海巨鲸长吟次声波基底与洋流下潜，超低频地壳低音与渊薮空间回响',
+    description: '72Hz 鲸吟次声，洋流深潜',
     badge: 'Whale',
     channelStrip: {
       oscA: {
@@ -2806,7 +2806,7 @@ export const EXTENDED_SOUND_PRESETS: Record<string, SoundPreset> = {
     name: '草木灵音',
     nameEn: 'Creature Night',
     category: 'Organic',
-    description: '256Hz 舒适低频与猫咪呼噜生灵共鸣，舒缓体感共振低音与温润软饱和',
+    description: '256Hz 猫咪呼噜，体感共振',
     badge: 'Creature',
     channelStrip: {
       oscA: {
@@ -2939,7 +2939,7 @@ export const EXTENDED_SOUND_PRESETS: Record<string, SoundPreset> = {
     name: '水晶梵境',
     nameEn: 'Crystal Mandala',
     category: 'Crystal',
-    description: '528Hz 纯石英水晶声钵清透脉轮共振，竖琴微光粒子与空灵空气感混响',
+    description: '528Hz 石英声钵，竖琴微光',
     badge: 'Mandala',
     channelStrip: {
       oscA: {
@@ -3072,7 +3072,7 @@ export const EXTENDED_SOUND_PRESETS: Record<string, SoundPreset> = {
     name: '心流自修',
     nameEn: 'Study Flow',
     category: 'Futuristic',
-    description: '174Hz 沉浸和弦与专注书房纸页微粒，低保真低频底噪与微妙磁带抖晃',
+    description: '174Hz 沉浸和弦，纸页低保真',
     badge: 'Flow',
     channelStrip: {
       oscA: {

@@ -297,7 +297,7 @@ export const LEGACY_SAMPLE_ALIASES: Record<string, string> = {
 };
 
 export function resolveSampleId(id: string): string {
-  return LEGACY_SAMPLE_ALIASES[id] || id;
+  return Object.prototype.hasOwnProperty.call(LEGACY_SAMPLE_ALIASES, id) ? LEGACY_SAMPLE_ALIASES[id] : id;
 }
 
 export let GRANULAR_SAMPLE_LIST: GranularSamplePreset[] = Object.values(GRANULAR_SAMPLE_PRESETS);
@@ -306,6 +306,27 @@ export let GRANULAR_SAMPLE_LIST: GranularSamplePreset[] = Object.values(GRANULAR
 const sampleBufferCache = new Map<string, AudioBuffer>();
 const reversedBufferCache = new WeakMap<AudioBuffer, AudioBuffer>();
 const peakCache = new Map<string, Float32Array>();
+const customBuffers = new Map<string, AudioBuffer>();
+let customBufferBytes = 0;
+let customSampleSequence = 0;
+export const MAX_IMPORTED_AUDIO_BYTES = 64 * 1024 * 1024;
+const MAX_CUSTOM_PCM_BYTES = 256 * 1024 * 1024;
+
+/**
+ * Releases built-in sample buffers and waveform peak contours cached by
+ * sampleId + sampleRate. Called by AudioEngine.dispose() to prevent
+ * unbounded memory growth across engine recreations.
+ *
+ * User-registered custom audio samples (customBuffers) are intentionally
+ * preserved so that imported materials survive engine restarts; they are
+ * bounded by MAX_CUSTOM_PCM_BYTES and released via removeCustomAudioSample.
+ */
+export function clearGranularSampleCache(): void {
+  sampleBufferCache.clear();
+  peakCache.clear();
+  // reversedBufferCache is a WeakMap and reclaims entries when the source
+  // buffers are GC'd; nothing to clear manually.
+}
 
 /**
  * 自动识别并返回采样的物理真实时长（秒）
@@ -314,7 +335,7 @@ const peakCache = new Map<string, Float32Array>();
 export function getSampleDuration(sampleId: string): number | null {
   const resolved = resolveSampleId(sampleId);
   for (const [key, buf] of sampleBufferCache.entries()) {
-    if ((key.startsWith(resolved) || key.startsWith(sampleId)) && buf.duration > 0) {
+    if ((key.startsWith(`${resolved}_`) || key.startsWith(`${sampleId}_`)) && buf.duration > 0) {
       return buf.duration;
     }
   }
@@ -379,8 +400,16 @@ export function registerCustomAudioSample(
   fileName: string,
   buffer: AudioBuffer
 ): GranularSamplePreset {
-  const customId = `custom_${Date.now()}`;
+  const bytes = buffer.length * buffer.numberOfChannels * Float32Array.BYTES_PER_ELEMENT;
+  if (!Number.isSafeInteger(bytes) || bytes <= 0 || !Number.isFinite(buffer.duration)) {
+    throw new Error('音频数据无效，请选择其他文件。');
+  }
+  if (customBuffers.size >= 128 || customBufferBytes + bytes > MAX_CUSTOM_PCM_BYTES) {
+    throw new Error('本次会话的音频样本空间已满，请使用较短的音频或重新打开应用。');
+  }
+  const customId = `custom_${Date.now()}_${++customSampleSequence}`;
   const cleanName = fileName.replace(/\.[^/.]+$/, '').slice(0, 16);
+  const peaks = getSampleWaveformPeaks(buffer);
   
   const preset: GranularSamplePreset = {
     id: customId,
@@ -398,8 +427,10 @@ export function registerCustomAudioSample(
 
   const cacheKey = `${customId}_${ctx.sampleRate}`;
   sampleBufferCache.set(cacheKey, buffer);
-  peakCache.set(customId, getSampleWaveformPeaks(buffer));
-  getReversedAudioBuffer(ctx, buffer);
+  customBuffers.set(customId, buffer);
+  customBufferBytes += bytes;
+  peakCache.set(customId, peaks);
+  // Reverse audio is created on demand; ordinary imports retain one PCM copy.
 
   return preset;
 }
@@ -413,6 +444,10 @@ export async function loadGranularSampleBuffer(
   sampleId: string
 ): Promise<AudioBuffer | null> {
   const resolvedId = resolveSampleId(sampleId);
+  // AudioBufferSourceNode resamples automatically across output devices.
+  // Custom files have no URL to reload when the context sample rate changes.
+  const customBuffer = customBuffers.get(resolvedId);
+  if (customBuffer) return customBuffer;
   const cacheKey = `${resolvedId}_${ctx.sampleRate}`;
   if (sampleBufferCache.has(cacheKey)) {
     return sampleBufferCache.get(cacheKey)!;

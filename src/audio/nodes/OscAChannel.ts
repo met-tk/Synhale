@@ -27,7 +27,13 @@ import {
   MULTI_FRAME_WAVETABLES,
   resolveMultiFramePosition
 } from '../dsp/wavetableData';
-import type { ParticleVisualGrain } from './GranularChannel';
+
+/**
+ * Calibrated acoustic scale factor for OscAChannel.
+ * Scales normalized user gain [0.0..1.0] by 50% so that 100% UI level corresponds to 0.5 physical gain,
+ * preventing wavetable and chord summing overload while providing fine-grained fader travel.
+ */
+const OSC_A_GAIN_SCALE = 0.5;
 
 export class OscAChannel implements AudioSourceNode {
   public readonly id = 'oscA';
@@ -187,7 +193,7 @@ export class OscAChannel implements AudioSourceNode {
     this.gainVoice2.gain.value = 0.0;
     this.gainVoice3.gain.value = 0.0;
     this.gainSub.gain.value = 0.0;
-    this.trackGain.gain.value = this.currentParams.gain;
+    this.trackGain.gain.value = this.currentParams.gain * OSC_A_GAIN_SCALE;
     this.bypassGain.gain.value = this.currentParams.bypass ? 0.0 : 1.0;
 
     // 6. Audio Graph Routing:
@@ -257,7 +263,8 @@ export class OscAChannel implements AudioSourceNode {
 
     if (params.gain !== undefined && Number.isFinite(params.gain)) {
       this.currentParams.gain = Math.max(0, Math.min(1, params.gain));
-      this.trackGain.gain.setTargetAtTime(this.currentParams.gain, now, 0.005);
+      const targetGain = this.currentParams.gain * OSC_A_GAIN_SCALE;
+      this.trackGain.gain.setTargetAtTime(targetGain, now, 0.005);
     }
 
     let pitchNeedsUpdate = false;
@@ -672,13 +679,6 @@ export class OscAChannel implements AudioSourceNode {
     this.warpShaper.curve = curve;
   }
 
-  /**
-   * Compatibility stub: Visual grains are exclusively managed by GranularChannel (ADR-01).
-   */
-  getActiveVisualGrains(): ParticleVisualGrain[] {
-    return [];
-  }
-
   getParams(): Readonly<OscAParams> {
     return { ...this.currentParams };
   }
@@ -723,8 +723,8 @@ export class OscAChannel implements AudioSourceNode {
 
   dispose(): void {
     if (this.isDisposed) return;
-    this.isDisposed = true;
     this.stop(0);
+    this.isDisposed = true;
     this.disconnect();
     this.osc1.disconnect();
     this.osc2.disconnect();

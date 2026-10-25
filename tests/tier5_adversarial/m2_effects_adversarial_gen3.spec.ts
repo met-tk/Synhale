@@ -180,14 +180,15 @@ describe('Milestone 2 (D14-D18) Adversarial Stress & Empirical Verification Suit
       const delay = new StereoDelay(ctx as unknown as BaseAudioContext);
       delay.setParams({
         time: 2.5,
-        feedback: 0.95,
+        feedback: 0.85, // anti-howl upper bound (StereoDelay.ts:154)
         mix: 1.0,
         damping: 8000
       });
+      ctx.advanceTime(1); // Allow scheduled anti-click ramps to settle.
 
       expect(delay.wetGain.gain.value).toBe(1.0);
-      expect(delay.feedbackGainL.gain.value).toBe(0.95);
-      expect(delay.feedbackGainR.gain.value).toBe(0.95);
+      expect(delay.feedbackGainL.gain.value).toBe(0.85);
+      expect(delay.feedbackGainR.gain.value).toBe(0.85);
       expect(delay.delayInGain.gain.value).toBe(1.0);
 
       // Execute 0ms purge
@@ -255,18 +256,18 @@ describe('Milestone 2 (D14-D18) Adversarial Stress & Empirical Verification Suit
       delay.dispose();
     });
 
-    it('D15-ADV-4: strictly clamps hostile/out-of-bound parameters and prevents feedback runaway (> 0.95)', () => {
+    it('D15-ADV-4: strictly clamps hostile/out-of-bound parameters and prevents feedback runaway (> 0.85)', () => {
       const delay = new StereoDelay(ctx as unknown as BaseAudioContext);
 
       delay.setParams({
         time: -100, // lower bound 0.01
-        feedback: 1.5, // upper bound 0.95 (anti-howl protection)
+        feedback: 1.5, // upper bound 0.85 (anti-howl protection)
         damping: 200, // lower bound 500
         mix: -0.5 // lower bound 0.0
       });
 
       expect(delay.getParams().time).toBe(0.01);
-      expect(delay.getParams().feedback).toBe(0.95);
+      expect(delay.getParams().feedback).toBe(0.85);
       expect(delay.getParams().damping).toBe(500);
       expect(delay.getParams().mix).toBe(0.0);
 
@@ -323,6 +324,7 @@ describe('Milestone 2 (D14-D18) Adversarial Stress & Empirical Verification Suit
       let prevComp = Infinity;
       for (const q of qTestValues) {
         filter.setParams({ resonance: q });
+        ctx.advanceTime(1); // Allow scheduled anti-click ramps to settle.
         const expectedComp = 1 / Math.sqrt(1 + 0.25 * q);
 
         expect(filterOutGain.gain.value).toBeCloseTo(expectedComp, 3);
@@ -345,6 +347,7 @@ describe('Milestone 2 (D14-D18) Adversarial Stress & Empirical Verification Suit
 
       // Test peak mode at Q=18 (where unconstrained resonance * 1.75 = 31.5dB)
       filter.setParams({ type: 'peak', resonance: 18.0 });
+      ctx.advanceTime(1); // Allow scheduled anti-click ramps to settle.
 
       expect(stage1.gain.value).toBe(9.0);
       expect(stage2.gain.value).toBe(9.0);
@@ -400,6 +403,7 @@ describe('Milestone 2 (D14-D18) Adversarial Stress & Empirical Verification Suit
     it('D16-ADV-5: Moog 24dB ladder emulation scales Q by 1.35x', () => {
       const filter = new MultimodeFilter(ctx as unknown as BaseAudioContext);
       filter.setParams({ type: 'ladder', resonance: 4.0 });
+      ctx.advanceTime(1); // Allow scheduled anti-click ramps to settle.
 
       // stageQ = sqrt(4) = 2.0; effectiveQ = 2.0 * 1.35 = 2.7
       const stage1 = (filter as any).stage1 as BiquadFilterNode;

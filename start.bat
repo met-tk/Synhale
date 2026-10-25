@@ -20,14 +20,12 @@ if not exist node_modules goto INSTALL_DEPS
 
 :START_APP
 echo [OK] Environment verified.
-echo [Info] Launching Synhale 2 on http://127.0.0.1:3000/ ...
+echo [Info] Starting Synhale 2...
+echo [Info] The browser will open the available address shown below once the server is ready.
 echo.
 
-:: Open browser in background
-start "" "http://127.0.0.1:3000/"
-
-:: Start Vite dev server
-call npm run dev
+:: Vite opens its resolved URL after listening, including when port 3000 is busy.
+call npm run dev -- --open
 if errorlevel 1 goto SERVER_ERROR
 goto EXIT
 

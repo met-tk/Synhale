@@ -29,7 +29,8 @@ export class BreathStateMachine {
   start(nowMs?: number): void {
     if (this.isPlaying) return;
     this.isPlaying = true;
-    this.lastTimestampMs = nowMs ?? (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    const timestamp = nowMs ?? (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    this.lastTimestampMs = Number.isFinite(timestamp) ? timestamp : null;
 
     // If initial stage has zero duration, pass through immediately
     this.handleZeroDurationPassthrough();
@@ -87,14 +88,7 @@ export class BreathStateMachine {
       return this.getSnapshot();
     } else {
       const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
-      if (this.lastTimestampMs === null) {
-        this.lastTimestampMs = now;
-        delta = 0;
-      } else {
-        const elapsed = (now - this.lastTimestampMs) / 1000.0;
-        delta = Number.isFinite(elapsed) ? Math.max(0, elapsed) : 0;
-        this.lastTimestampMs = now;
-      }
+      return this.updateTimestamp(now);
     }
 
     if (delta <= 0) {
@@ -109,7 +103,7 @@ export class BreathStateMachine {
    * Step using absolute timestamp in milliseconds
    */
   updateTimestamp(nowMs: number): BreathClockSnapshot {
-    if (!this.isPlaying) {
+    if (!this.isPlaying || !Number.isFinite(nowMs)) {
       return this.getSnapshot();
     }
 
@@ -118,7 +112,10 @@ export class BreathStateMachine {
       return this.getSnapshot();
     }
 
-    const deltaSec = Math.max(0, (nowMs - this.lastTimestampMs) / 1000.0);
+    // Regressing or invalid timestamps must not move the reference backwards:
+    // otherwise the next valid frame counts the same interval a second time.
+    if (nowMs < this.lastTimestampMs) return this.getSnapshot();
+    const deltaSec = (nowMs - this.lastTimestampMs) / 1000.0;
     this.lastTimestampMs = nowMs;
     return this.tick(deltaSec);
   }
@@ -157,6 +154,7 @@ export class BreathStateMachine {
    * Directly switch to a specific stage
    */
   setStage(stage: BreathStage): void {
+    if (!['inhale', 'holdIn', 'exhale', 'holdOut'].includes(stage)) return;
     this.currentStage = stage;
     this.stageElapsed = 0;
     this.handleZeroDurationPassthrough();
@@ -167,7 +165,9 @@ export class BreathStateMachine {
    */
   getStageDuration(stage: BreathStage): number {
     const dur = this.rhythm[stage];
-    return typeof dur === 'number' && Number.isFinite(dur) ? Math.max(0, dur) : 0;
+    // Sub-millisecond stages are skipped everywhere, including the fast-cycle
+    // divisor, so a large leap and small ticks use the same effective rhythm.
+    return typeof dur === 'number' && Number.isFinite(dur) && dur > 0.001 ? Math.min(60, dur) : 0;
   }
 
   /**
@@ -289,7 +289,7 @@ export class BreathStateMachine {
     // Fast leap optimization for large time jumps (e.g. background tab return)
     if (deltaSec >= totalCycleDuration) {
       const fullCycles = Math.floor(deltaSec / totalCycleDuration);
-      this.cycleCount += fullCycles;
+      this.cycleCount = Math.min(Number.MAX_SAFE_INTEGER, this.cycleCount + fullCycles);
       deltaSec %= totalCycleDuration;
     }
 
@@ -336,7 +336,7 @@ export class BreathStateMachine {
       case 'holdOut':
         this.currentStage = 'inhale';
         if (incrementCycle) {
-          this.cycleCount++;
+          this.cycleCount = Math.min(Number.MAX_SAFE_INTEGER, this.cycleCount + 1);
         }
         break;
     }

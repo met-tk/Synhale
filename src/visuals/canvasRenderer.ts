@@ -11,7 +11,7 @@ import { evaluateOrganicBreathMotion } from './organicMotion';
  * Sanitizes devicePixelRatio to prevent division by zero or non-positive scaling.
  */
 export function sanitizeDPR(dpr: number): number {
-  return typeof dpr === 'number' && dpr > 0 ? dpr : 1.0;
+  return Number.isFinite(dpr) && dpr > 0 ? dpr : 1.0;
 }
 
 /**
@@ -160,8 +160,8 @@ export class CanvasRenderer implements VisualRenderer {
 
     ctx.save();
 
-    // 1. Fill background with theme color
-    const bgColor = isDarkTheme ? '#09090b' : '#fcfbf9';
+    // 1. Fill background with theme color (soft palette tint when provided)
+    const bgColor = params.background ?? (isDarkTheme ? '#09090b' : '#fcfbf9');
     ctx.fillStyle = bgColor;
     ctx.fillRect(0, 0, width, height);
 

@@ -72,7 +72,7 @@ describe('Milestone 4 (D27 - D33) Deep Adversarial Stress Suite', () => {
       let totalCreated = 0;
       let totalClosed = 0;
 
-      const MockAudioContext = vi.fn().mockImplementation(() => {
+      const MockAudioContext = vi.fn().mockImplementation(function () {
         totalCreated++;
         openContextCount++;
         return {
@@ -128,10 +128,10 @@ describe('Milestone 4 (D27 - D33) Deep Adversarial Stress Suite', () => {
     });
 
     it('D27-ADV-2: close() rejection is safely swallowed and does not cause unhandled crash', async () => {
-      const MockAudioContext = vi.fn().mockImplementation(() => ({
+      const MockAudioContext = vi.fn().mockImplementation(function () { return {
         decodeAudioData: vi.fn().mockRejectedValue(new Error('Corrupt header')),
         close: vi.fn().mockRejectedValue(new Error('Hardware context already torn down'))
-      }));
+      }; });
 
       (window as any).AudioContext = MockAudioContext;
 

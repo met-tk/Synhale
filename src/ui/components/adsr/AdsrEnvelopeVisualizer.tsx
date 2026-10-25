@@ -15,6 +15,7 @@
  */
 
 import React, { useRef, useState, useCallback } from 'react';
+import { readAccent } from '../../theme/deckPalette';
 
 export interface AdsrEnvelopeVisualizerProps {
   attack: number; // 0.005 - 15.0s
@@ -34,7 +35,6 @@ type DragHandleType = 'attack' | 'decay' | 'sustain' | 'release' | 'sustain-bar'
 const MAX_TIME = 15.0;
 const MIN_TIME = 0.005;
 const K_CURVE = 6.0;
-const DENOM_LOG = Math.log(1 + K_CURVE * MAX_TIME);
 
 const normLog = (val: number, maxT = MAX_TIME, k = K_CURVE) => {
   const clamped = Math.max(0, Math.min(maxT, val));
@@ -43,7 +43,11 @@ const normLog = (val: number, maxT = MAX_TIME, k = K_CURVE) => {
 
 const invNormLog = (norm: number, maxT = MAX_TIME, k = K_CURVE) => {
   const clamped = Math.max(0, Math.min(1, norm));
-  const val = (Math.exp(clamped * DENOM_LOG) - 1) / k;
+  // Recompute the denominator with the actual maxT/k arguments instead of using
+  // a module-level cache; otherwise callers passing non-default values would
+  // receive incorrectly inverted results. The cost is negligible (single log).
+  const denom = Math.log(1 + k * maxT);
+  const val = (Math.exp(clamped * denom) - 1) / k;
   return Math.max(MIN_TIME, Math.min(maxT, val));
 };
 
@@ -61,6 +65,11 @@ export const AdsrEnvelopeVisualizer: React.FC<AdsrEnvelopeVisualizerProps> = ({
 }) => {
   const isPoly = voiceMode !== 'drone';
   const svgRef = useRef<SVGSVGElement | null>(null);
+
+  // Soft palette accent driving the envelope curve, nodes and stage labels
+  const acc400 = readAccent('400', '#38bdf8');
+  const acc500 = readAccent('500', '#0ea5e9');
+  const acc600 = readAccent('600', '#0284c7');
 
   const [activeHandle, setActiveHandle] = useState<DragHandleType | null>(null);
   const [hoveredHandle, setHoveredHandle] = useState<DragHandleType | null>(null);
@@ -306,14 +315,14 @@ export const AdsrEnvelopeVisualizer: React.FC<AdsrEnvelopeVisualizerProps> = ({
           <defs>
             {/* Luminous area gradient */}
             <linearGradient id="adsr-fill-grad" x1="0%" y1="0%" x2="0%" y2="100%">
-              <stop offset="0%" stopColor="#0284c7" stopOpacity={isDark ? 0.32 : 0.22} />
-              <stop offset="50%" stopColor="#0ea5e9" stopOpacity={isDark ? 0.12 : 0.08} />
-              <stop offset="100%" stopColor="#0284c7" stopOpacity="0.01" />
+              <stop offset="0%" stopColor={acc600} stopOpacity={isDark ? 0.32 : 0.22} />
+              <stop offset="50%" stopColor={acc500} stopOpacity={isDark ? 0.12 : 0.08} />
+              <stop offset="100%" stopColor={acc600} stopOpacity="0.01" />
             </linearGradient>
 
             {/* Subtle glow filter */}
             <filter id="adsr-line-glow" x="-10%" y="-10%" width="120%" height="120%">
-              <feDropShadow dx="0" dy="0" stdDeviation="1.5" floodColor="#38bdf8" floodOpacity={isDark ? 0.45 : 0.3} />
+              <feDropShadow dx="0" dy="0" stdDeviation="1.5" floodColor={acc400} floodOpacity={isDark ? 0.45 : 0.3} />
             </filter>
           </defs>
 
@@ -338,18 +347,18 @@ export const AdsrEnvelopeVisualizer: React.FC<AdsrEnvelopeVisualizerProps> = ({
 
           {/* Stage Zone Labels with Adaptive Abbreviation for Narrow Segments */}
           {wAttack >= 12 && (
-            <text x={x0 + wAttack * 0.5} y={botY - 4} textAnchor="middle" fill="#0284c7" fillOpacity={0.35} fontSize="7" fontFamily="monospace" fontWeight="600">
+            <text x={x0 + wAttack * 0.5} y={botY - 4} textAnchor="middle" fill={acc600} fillOpacity={0.35} fontSize="7" fontFamily="monospace" fontWeight="600">
               {wAttack >= 28 ? 'ATTACK' : 'A'}
             </text>
           )}
           {wDecay >= 12 && (
-            <text x={x1 + wDecay * 0.5} y={botY - 4} textAnchor="middle" fill="#0284c7" fillOpacity={0.35} fontSize="7" fontFamily="monospace" fontWeight="600">
+            <text x={x1 + wDecay * 0.5} y={botY - 4} textAnchor="middle" fill={acc600} fillOpacity={0.35} fontSize="7" fontFamily="monospace" fontWeight="600">
               {wDecay >= 28 ? 'DECAY' : 'D'}
             </text>
           )}
-          <text x={x2 + wSustain * 0.5} y={botY - 4} textAnchor="middle" fill="#0284c7" fillOpacity={0.35} fontSize="7" fontFamily="monospace" fontWeight="600">SUSTAIN</text>
+          <text x={x2 + wSustain * 0.5} y={botY - 4} textAnchor="middle" fill={acc600} fillOpacity={0.35} fontSize="7" fontFamily="monospace" fontWeight="600">SUSTAIN</text>
           {wRelease >= 14 && (
-            <text x={x3 + wRelease * 0.5} y={botY - 4} textAnchor="middle" fill="#0284c7" fillOpacity={0.35} fontSize="7" fontFamily="monospace" fontWeight="600">
+            <text x={x3 + wRelease * 0.5} y={botY - 4} textAnchor="middle" fill={acc600} fillOpacity={0.35} fontSize="7" fontFamily="monospace" fontWeight="600">
               {wRelease >= 30 ? 'RELEASE' : 'R'}
             </text>
           )}
@@ -358,11 +367,11 @@ export const AdsrEnvelopeVisualizer: React.FC<AdsrEnvelopeVisualizerProps> = ({
           <path d={areaD} fill="url(#adsr-fill-grad)" />
 
           {/* 4. Envelope Contour Curve with Glow Filter */}
-          <path d={pathD} fill="none" stroke="#38bdf8" strokeWidth={1.5} filter="url(#adsr-line-glow)" />
+          <path d={pathD} fill="none" stroke={acc400} strokeWidth={1.5} filter="url(#adsr-line-glow)" />
 
           {/* 5. Anchor Visual Node Circles (Preserving exact circle indices for test assertions) */}
           {/* Start Node: circles[0], circles[1] */}
-          <circle cx={x0} cy={botY} r={3} fill="#0a0a0a" stroke="#38bdf8" strokeWidth={1} />
+          <circle cx={x0} cy={botY} r={3} fill="#0a0a0a" stroke={acc400} strokeWidth={1} />
           <circle cx={x0} cy={botY} r={1.2} fill="#ffffff" />
 
           {/* Peak Node: circles[2], circles[3] */}
@@ -371,9 +380,9 @@ export const AdsrEnvelopeVisualizer: React.FC<AdsrEnvelopeVisualizerProps> = ({
             cy={topY}
             r={activeHandle === 'attack' || hoveredHandle === 'attack' ? 4.2 : 3.2}
             fill="#0a0a0a"
-            stroke="#38bdf8"
+            stroke={acc400}
             strokeWidth={activeHandle === 'attack' ? 2 : 1.2}
-            className="drop-shadow-[0_0_6px_#38bdf8] transition-all"
+            className="transition-all" style={{ filter: `drop-shadow(0 0 6px ${acc400})` }}
           />
           <circle cx={x1} cy={topY} r={1.3} fill="#ffffff" />
 
@@ -383,9 +392,9 @@ export const AdsrEnvelopeVisualizer: React.FC<AdsrEnvelopeVisualizerProps> = ({
             cy={sustainY}
             r={activeHandle === 'decay' || hoveredHandle === 'decay' ? 4.2 : 3.2}
             fill="#0a0a0a"
-            stroke="#38bdf8"
+            stroke={acc400}
             strokeWidth={activeHandle === 'decay' ? 2 : 1.2}
-            className="drop-shadow-[0_0_6px_#38bdf8] transition-all"
+            className="transition-all" style={{ filter: `drop-shadow(0 0 6px ${acc400})` }}
           />
           <circle cx={x2} cy={sustainY} r={1.3} fill="#ffffff" />
 
@@ -395,9 +404,9 @@ export const AdsrEnvelopeVisualizer: React.FC<AdsrEnvelopeVisualizerProps> = ({
             cy={sustainY}
             r={activeHandle === 'sustain' || hoveredHandle === 'sustain' ? 4.2 : 3.2}
             fill="#0a0a0a"
-            stroke="#38bdf8"
+            stroke={acc400}
             strokeWidth={activeHandle === 'sustain' ? 2 : 1.2}
-            className="drop-shadow-[0_0_6px_#38bdf8] transition-all"
+            className="transition-all" style={{ filter: `drop-shadow(0 0 6px ${acc400})` }}
           />
           <circle cx={x3} cy={sustainY} r={1.3} fill="#ffffff" />
 
@@ -407,9 +416,9 @@ export const AdsrEnvelopeVisualizer: React.FC<AdsrEnvelopeVisualizerProps> = ({
             cy={botY}
             r={activeHandle === 'release' || hoveredHandle === 'release' ? 4.0 : 3}
             fill="#0a0a0a"
-            stroke="#38bdf8"
+            stroke={acc400}
             strokeWidth={activeHandle === 'release' ? 2 : 1}
-            className="drop-shadow-[0_0_6px_#38bdf8] transition-all"
+            className="transition-all" style={{ filter: `drop-shadow(0 0 6px ${acc400})` }}
           />
           <circle cx={x4} cy={botY} r={1.2} fill="#ffffff" />
 
@@ -533,15 +542,15 @@ export const AdsrEnvelopeVisualizer: React.FC<AdsrEnvelopeVisualizerProps> = ({
           {/* 8. Steady Sustain Playhead Indicator (Monophonic Playback Only, disabled in Poly mode) */}
           {!isPoly && isPlaying && (
             <g className="animate-pulse">
-              <line x1={x2} y1={topY} x2={x2} y2={botY} stroke="#38bdf8" strokeDasharray="2,2" strokeWidth={1} />
+              <line x1={x2} y1={topY} x2={x2} y2={botY} stroke={acc400} strokeDasharray="2,2" strokeWidth={1} />
               <circle
                 cx={x2}
                 cy={sustainY}
                 r={4.5}
                 fill="#ffffff"
-                stroke="#0284c7"
+                stroke={acc600}
                 strokeWidth={2}
-                className="drop-shadow-[0_0_8px_#38bdf8]"
+                style={{ filter: `drop-shadow(0 0 8px ${acc400})` }}
               />
             </g>
           )}

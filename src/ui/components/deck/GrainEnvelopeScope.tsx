@@ -1,5 +1,6 @@
 import React, { useRef, useState, useCallback } from 'react';
 import { useTheme } from '../../theme';
+import { readAccent, readAccentRgb } from '../../theme/deckPalette';
 import type { GrainEnvelopeConfig, GrainDirection, GrainWindowShape } from '../../../types/audio';
 
 interface GrainEnvelopeScopeProps {
@@ -244,19 +245,12 @@ export const GrainEnvelopeScope: React.FC<GrainEnvelopeScopeProps> = ({
     });
   };
 
-  // 顶部时长徽标指针拖拽起始：捕获起始坐标与初始时长
+  // 顶部时长徽标指针拖拽起始：委托给统一的 handlePointerDown('duration') 以避免
+  // 与包络图右端 duration 节点重复实现指针捕获和起始状态初始化逻辑。指针移动
+  // 计算仍由 handleDurationPointerMove 独立处理（保留双轴 dx+dy 映射语义）。
   const handleDurationPointerDown = (e: React.PointerEvent) => {
     if (!onDurationChange) return;
-    e.preventDefault();
-    e.stopPropagation();
-    (e.target as Element).setPointerCapture(e.pointerId);
-    const safeInitialDuration = Number.isFinite(duration) && duration > 0 ? duration : 0.245;
-    durationDragRef.current = {
-      startX: e.clientX,
-      startY: e.clientY,
-      startDuration: safeInitialDuration
-    };
-    setIsDraggingDuration(true);
+    handlePointerDown('duration', e);
   };
 
   // 顶部时长徽标拖拽计算：双轴移动平滑映射为 20ms - 10000ms 微粒播放时长 (自适应指数缩放)
@@ -612,12 +606,12 @@ export const GrainEnvelopeScope: React.FC<GrainEnvelopeScopeProps> = ({
         >
           <defs>
             <linearGradient id="grain-env-grad-v2" x1="0%" y1="0%" x2="0%" y2="100%">
-              <stop offset="0%" stopColor="#38bdf8" stopOpacity={isDark ? "0.32" : "0.20"} />
-              <stop offset="70%" stopColor="#38bdf8" stopOpacity={isDark ? "0.08" : "0.04"} />
-              <stop offset="100%" stopColor="#38bdf8" stopOpacity="0.0" />
+              <stop offset="0%" stopColor={readAccent(isDark ? '400' : '600', '#38bdf8')} stopOpacity={isDark ? "0.32" : "0.20"} />
+              <stop offset="70%" stopColor={readAccent(isDark ? '400' : '600', '#38bdf8')} stopOpacity={isDark ? "0.08" : "0.04"} />
+              <stop offset="100%" stopColor={readAccent(isDark ? '400' : '600', '#38bdf8')} stopOpacity="0.0" />
             </linearGradient>
             <filter id="grain-curve-glow" x="-20%" y="-20%" width="140%" height="140%">
-              <feDropShadow dx="0" dy="0" stdDeviation="1.5" floodColor="#38bdf8" floodOpacity="0.45" />
+              <feDropShadow dx="0" dy="0" stdDeviation="1.5" floodColor={readAccent(isDark ? '400' : '600', '#38bdf8')} floodOpacity="0.45" />
             </filter>
           </defs>
 
@@ -628,7 +622,7 @@ export const GrainEnvelopeScope: React.FC<GrainEnvelopeScopeProps> = ({
           <path
             d={pathD}
             fill="none"
-            stroke="#38bdf8"
+            stroke={readAccent(isDark ? '400' : '600', '#38bdf8')}
             strokeWidth="2.2"
             strokeLinecap="round"
             strokeLinejoin="round"
@@ -649,9 +643,9 @@ export const GrainEnvelopeScope: React.FC<GrainEnvelopeScopeProps> = ({
           {/* Live Drag Guidelines & HUD Tooltip Badges */}
           {activeDraggingNode === 'attack' && (
             <g className="pointer-events-none">
-              <line x1={x1} y1={yPeak} x2={x1} y2={yBase} stroke="#38bdf8" strokeWidth="1" strokeDasharray="2,2" opacity="0.65" />
-              <rect x={Math.max(4, Math.min(vbW - 68, x1 - 34))} y={Math.max(2, yPeak - 18)} width="68" height="14" rx="3" fill={isDark ? "rgba(15, 23, 42, 0.95)" : "rgba(255, 255, 255, 0.95)"} stroke="#38bdf8" strokeWidth="0.8" />
-              <text x={Math.max(4, Math.min(vbW - 68, x1 - 34)) + 34} y={Math.max(2, yPeak - 18) + 10} textAnchor="middle" fill="#38bdf8" fontSize="7" fontFamily="monospace" fontWeight="bold">
+              <line x1={x1} y1={yPeak} x2={x1} y2={yBase} stroke={readAccent(isDark ? '400' : '600', '#38bdf8')} strokeWidth="1" strokeDasharray="2,2" opacity="0.65" />
+              <rect x={Math.max(4, Math.min(vbW - 68, x1 - 34))} y={Math.max(2, yPeak - 18)} width="68" height="14" rx="3" fill={isDark ? "rgba(15, 23, 42, 0.95)" : "rgba(255, 255, 255, 0.95)"} stroke={readAccent(isDark ? '400' : '600', '#38bdf8')} strokeWidth="0.8" />
+              <text x={Math.max(4, Math.min(vbW - 68, x1 - 34)) + 34} y={Math.max(2, yPeak - 18) + 10} textAnchor="middle" fill={readAccent(isDark ? '400' : '600', '#38bdf8')} fontSize="7" fontFamily="monospace" fontWeight="bold">
                 ATK {Math.round(safeDuration * attackFrac * 1000)}ms
               </text>
             </g>
@@ -659,9 +653,9 @@ export const GrainEnvelopeScope: React.FC<GrainEnvelopeScopeProps> = ({
 
           {activeDraggingNode === 'release' && (
             <g className="pointer-events-none">
-              <line x1={x2} y1={yPeak} x2={x2} y2={yBase} stroke="#38bdf8" strokeWidth="1" strokeDasharray="2,2" opacity="0.65" />
-              <rect x={Math.max(4, Math.min(vbW - 68, x2 - 34))} y={Math.max(2, yPeak - 18)} width="68" height="14" rx="3" fill={isDark ? "rgba(15, 23, 42, 0.95)" : "rgba(255, 255, 255, 0.95)"} stroke="#38bdf8" strokeWidth="0.8" />
-              <text x={Math.max(4, Math.min(vbW - 68, x2 - 34)) + 34} y={Math.max(2, yPeak - 18) + 10} textAnchor="middle" fill="#38bdf8" fontSize="7" fontFamily="monospace" fontWeight="bold">
+              <line x1={x2} y1={yPeak} x2={x2} y2={yBase} stroke={readAccent(isDark ? '400' : '600', '#38bdf8')} strokeWidth="1" strokeDasharray="2,2" opacity="0.65" />
+              <rect x={Math.max(4, Math.min(vbW - 68, x2 - 34))} y={Math.max(2, yPeak - 18)} width="68" height="14" rx="3" fill={isDark ? "rgba(15, 23, 42, 0.95)" : "rgba(255, 255, 255, 0.95)"} stroke={readAccent(isDark ? '400' : '600', '#38bdf8')} strokeWidth="0.8" />
+              <text x={Math.max(4, Math.min(vbW - 68, x2 - 34)) + 34} y={Math.max(2, yPeak - 18) + 10} textAnchor="middle" fill={readAccent(isDark ? '400' : '600', '#38bdf8')} fontSize="7" fontFamily="monospace" fontWeight="bold">
                 REL {Math.round(safeDuration * releaseFrac * 1000)}ms
               </text>
             </g>
@@ -669,9 +663,9 @@ export const GrainEnvelopeScope: React.FC<GrainEnvelopeScopeProps> = ({
 
           {activeDraggingNode === 'duration' && (
             <g className="pointer-events-none">
-              <line x1={x3} y1={yPeak} x2={x3} y2={yBase} stroke="#38bdf8" strokeWidth="1.2" strokeDasharray="2,2" opacity="0.8" />
-              <rect x={Math.max(4, Math.min(vbW - 74, x3 - 37))} y={Math.max(2, yBase - 22)} width="74" height="15" rx="3" fill={isDark ? "rgba(15, 23, 42, 0.95)" : "rgba(255, 255, 255, 0.95)"} stroke="#38bdf8" strokeWidth="1.0" />
-              <text x={Math.max(4, Math.min(vbW - 74, x3 - 37)) + 37} y={Math.max(2, yBase - 22) + 10.5} textAnchor="middle" fill="#38bdf8" fontSize="7.5" fontFamily="monospace" fontWeight="bold">
+              <line x1={x3} y1={yPeak} x2={x3} y2={yBase} stroke={readAccent(isDark ? '400' : '600', '#38bdf8')} strokeWidth="1.2" strokeDasharray="2,2" opacity="0.8" />
+              <rect x={Math.max(4, Math.min(vbW - 74, x3 - 37))} y={Math.max(2, yBase - 22)} width="74" height="15" rx="3" fill={isDark ? "rgba(15, 23, 42, 0.95)" : "rgba(255, 255, 255, 0.95)"} stroke={readAccent(isDark ? '400' : '600', '#38bdf8')} strokeWidth="1.0" />
+              <text x={Math.max(4, Math.min(vbW - 74, x3 - 37)) + 37} y={Math.max(2, yBase - 22) + 10.5} textAnchor="middle" fill={readAccent(isDark ? '400' : '600', '#38bdf8')} fontSize="7.5" fontFamily="monospace" fontWeight="bold">
                 LEN {safeDuration >= 1.0 ? `${safeDuration.toFixed(2)}s` : `${Math.round(safeDuration * 1000)}ms`}
               </text>
             </g>
@@ -690,8 +684,8 @@ export const GrainEnvelopeScope: React.FC<GrainEnvelopeScopeProps> = ({
               cx={x1}
               cy={yPeak}
               r={activeDraggingNode === 'attack' ? 9.0 : 7.0}
-              fill="rgba(56, 189, 248, 0.22)"
-              stroke="rgba(56, 189, 248, 0.65)"
+              fill={`rgba(${readAccentRgb("400", "#38bdf8")}, 0.22)`}
+              stroke={`rgba(${readAccentRgb("400", "#38bdf8")}, 0.65)`}
               strokeWidth="1.2"
               className="transition-colors group-hover:stroke-sky-300 group-hover:fill-sky-400/35"
               onPointerDown={e => handlePointerDown('attack', e)}
@@ -700,7 +694,7 @@ export const GrainEnvelopeScope: React.FC<GrainEnvelopeScopeProps> = ({
               cx={x1}
               cy={yPeak}
               r="3.5"
-              fill="#38bdf8"
+              fill={readAccent(isDark ? '400' : '600', '#38bdf8')}
               stroke={isDark ? "#090d16" : "#ffffff"}
               strokeWidth="1.2"
               className="transition-colors group-hover:fill-sky-200"
@@ -721,8 +715,8 @@ export const GrainEnvelopeScope: React.FC<GrainEnvelopeScopeProps> = ({
               cx={x2}
               cy={yPeak}
               r={activeDraggingNode === 'release' ? 9.0 : 7.0}
-              fill="rgba(56, 189, 248, 0.22)"
-              stroke="rgba(56, 189, 248, 0.65)"
+              fill={`rgba(${readAccentRgb("400", "#38bdf8")}, 0.22)`}
+              stroke={`rgba(${readAccentRgb("400", "#38bdf8")}, 0.65)`}
               strokeWidth="1.2"
               className="transition-colors group-hover:stroke-sky-300 group-hover:fill-sky-400/35"
               onPointerDown={e => handlePointerDown('release', e)}
@@ -731,7 +725,7 @@ export const GrainEnvelopeScope: React.FC<GrainEnvelopeScopeProps> = ({
               cx={x2}
               cy={yPeak}
               r="3.5"
-              fill="#38bdf8"
+              fill={readAccent(isDark ? '400' : '600', '#38bdf8')}
               stroke={isDark ? "#090d16" : "#ffffff"}
               strokeWidth="1.2"
               className="transition-colors group-hover:fill-sky-200"
@@ -753,8 +747,8 @@ export const GrainEnvelopeScope: React.FC<GrainEnvelopeScopeProps> = ({
               cx={x3}
               cy={yBase}
               r={activeDraggingNode === 'duration' ? 9.5 : 7.0}
-              fill="rgba(56, 189, 248, 0.22)"
-              stroke="rgba(56, 189, 248, 0.65)"
+              fill={`rgba(${readAccentRgb("400", "#38bdf8")}, 0.22)`}
+              stroke={`rgba(${readAccentRgb("400", "#38bdf8")}, 0.65)`}
               strokeWidth="1.2"
               className="transition-colors group-hover:stroke-sky-300 group-hover:fill-sky-400/35"
               onPointerDown={e => handlePointerDown('duration', e)}
@@ -763,7 +757,7 @@ export const GrainEnvelopeScope: React.FC<GrainEnvelopeScopeProps> = ({
               cx={x3}
               cy={yBase}
               r="3.5"
-              fill="#38bdf8"
+              fill={readAccent(isDark ? '400' : '600', '#38bdf8')}
               stroke={isDark ? "#090d16" : "#ffffff"}
               strokeWidth="1.2"
               className="transition-colors group-hover:fill-sky-200"
@@ -775,7 +769,7 @@ export const GrainEnvelopeScope: React.FC<GrainEnvelopeScopeProps> = ({
               width="7"
               height="10"
               rx="2"
-              fill="#38bdf8"
+              fill={readAccent(isDark ? '400' : '600', '#38bdf8')}
               stroke={isDark ? "#090d16" : "#ffffff"}
               strokeWidth="1.2"
               className="transition-colors group-hover:fill-sky-200 group-hover:stroke-sky-300"

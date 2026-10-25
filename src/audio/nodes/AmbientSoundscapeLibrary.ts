@@ -1074,6 +1074,16 @@ const realAudioBufferCache = new Map<string, AudioBuffer>();
 const inFlightLoads = new Map<string, Promise<AudioBuffer | null>>();
 
 /**
+ * Releases all cached ambient soundscape AudioBuffers and pending decode promises.
+ * Called by AudioEngine.dispose() to prevent unbounded memory growth across
+ * engine recreations (each new AudioContext may key on a different sampleRate).
+ */
+export function clearAmbientSoundscapeCache(): void {
+  realAudioBufferCache.clear();
+  inFlightLoads.clear();
+}
+
+/**
  * Equalizes the perceptual loudness across any synthesized or decoded AudioBuffer.
  * Calibrates true RMS to target -16..-20 dBFS level and applies soft-knee tanh limiting
  * to prevent digital clipping while ensuring all soundscapes match in apparent loudness.
@@ -1153,7 +1163,7 @@ export async function loadRealAmbientAudioBuffer(
       const rawPath = audioUrl.startsWith('/') || audioUrl.startsWith('./')
         ? audioUrl
         : `/audio/ambient/${audioUrl}`;
-      const resp = await fetch(rawPath);
+      const resp = await fetch(rawPath.startsWith('/') ? `.${rawPath}` : rawPath);
       if (!resp.ok) return null;
       const arrayBuffer = await resp.arrayBuffer();
       const decoded = await ctx.decodeAudioData(arrayBuffer);

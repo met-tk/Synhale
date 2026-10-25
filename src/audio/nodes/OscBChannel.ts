@@ -1,3 +1,4 @@
+import { sanitizeParameterPatch } from '../dsp/parameterSafety';
 /**
  * Synhale 2 - OscBChannel (Pink Noise Airflow Generator & Airway Shaping)
  * 
@@ -180,6 +181,7 @@ export class OscBChannel implements AudioSourceNode {
 
   setParams(params: Partial<ChannelStripParams['oscB']>): void {
     if (this.isDisposed) return;
+    params = sanitizeParameterPatch(params);
     const now = this.ctx.currentTime;
 
     if (params.gain !== undefined) {
@@ -365,12 +367,12 @@ export class OscBChannel implements AudioSourceNode {
 
   dispose(): void {
     if (this.isDisposed) return;
+    this.stop(0);
     this.isDisposed = true;
     for (const timer of this.switchTimers) {
       clearTimeout(timer);
     }
     this.switchTimers = [];
-    this.stop(0);
     this.disconnect();
     this.noiseSource.disconnect();
     this.motionLfo.disconnect();

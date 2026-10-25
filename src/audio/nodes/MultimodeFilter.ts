@@ -32,6 +32,13 @@ export class MultimodeFilter implements AudioEffectNode {
 
   private isDisposed = false;
   private filterTypeTimer: ReturnType<typeof setTimeout> | null = null;
+  // Purge/restore state for zero-residue hard cut. Without a purge, the
+  // internal BiquadFilterNode delay lines retain energy that can ring out
+  // during the cut micro-ramp and smear the restart. purge() zeros the
+  // in/out/bypass gains instantly; restore() re-applies the pre-purge
+  // bypass state via a 5ms relay crossfade to match the live path.
+  private isPurged = false;
+  private prePurgeBypass = false;
 
   constructor(ctx: BaseAudioContext, id = 'filter') {
     this.id = id;
@@ -197,9 +204,6 @@ export class MultimodeFilter implements AudioEffectNode {
           this.filterOutGain.gain.value = resGainCompensation;
         } else {
           this.filterOutGain.gain.setTargetAtTime(resGainCompensation, now, 0.015);
-          if ((this.ctx as any)?.advanceTime) {
-            (this.filterOutGain.gain as any)._value = resGainCompensation;
-          }
         }
       }
     }
@@ -211,10 +215,6 @@ export class MultimodeFilter implements AudioEffectNode {
       } else {
         this.stage1.gain.setTargetAtTime(peakGain, now, 0.015);
         this.stage2.gain.setTargetAtTime(peakGain, now, 0.015);
-        if ((this.ctx as any)?.advanceTime) {
-          (this.stage1.gain as any)._value = peakGain;
-          (this.stage2.gain as any)._value = peakGain;
-        }
       }
     }
 
@@ -229,12 +229,6 @@ export class MultimodeFilter implements AudioEffectNode {
       this.stage2.frequency.setTargetAtTime(cutoff, now, 0.015);
       this.stage1.Q.setTargetAtTime(effectiveQ, now, 0.015);
       this.stage2.Q.setTargetAtTime(effectiveQ, now, 0.015);
-      if ((this.ctx as any)?.advanceTime) {
-        (this.stage1.frequency as any)._value = cutoff;
-        (this.stage2.frequency as any)._value = cutoff;
-        (this.stage1.Q as any)._value = effectiveQ;
-        (this.stage2.Q as any)._value = effectiveQ;
-      }
     }
   }
 
@@ -251,7 +245,50 @@ export class MultimodeFilter implements AudioEffectNode {
   }
 
   purge(): void {
-    // Zero-residue purge
+    // Zero-residue purge: instantly silence all filter path gains so the
+    // internal BiquadFilterNode delay lines can no longer contribute energy
+    // downstream during the master cut micro-ramp. Restored by restore().
+    if (this.isDisposed || this.isPurged) return;
+    this.isPurged = true;
+    this.prePurgeBypass = this.currentParams.bypass;
+
+    const now = this.ctx.currentTime;
+    this.filterInGain.gain.cancelScheduledValues(now);
+    this.filterInGain.gain.setValueAtTime(0.0, now);
+
+    this.filterOutGain.gain.cancelScheduledValues(now);
+    this.filterOutGain.gain.setValueAtTime(0.0, now);
+
+    this.bypassDryGain.gain.cancelScheduledValues(now);
+    this.bypassDryGain.gain.setValueAtTime(0.0, now);
+  }
+
+  /**
+   * Restores normal audio routing after hard cut. Re-applies the pre-purge
+   * bypass state through the same 5ms relay crossfade used by setParams.
+   */
+  restore(): void {
+    if (this.isDisposed || !this.isPurged) return;
+    this.isPurged = false;
+
+    const now = this.ctx.currentTime;
+    const isBypassed = this.prePurgeBypass;
+    const resGainComp = 1 / Math.sqrt(1 + 0.25 * this.currentParams.resonance);
+    const wetTarget = isBypassed ? 0.0 : resGainComp;
+    const dryTarget = isBypassed ? 1.0 : 0.0;
+    const rampEnd = now + 0.005;
+
+    this.bypassDryGain.gain.cancelScheduledValues(now);
+    this.bypassDryGain.gain.setValueAtTime(this.bypassDryGain.gain.value, now);
+    this.bypassDryGain.gain.linearRampToValueAtTime(dryTarget, rampEnd);
+
+    this.filterInGain.gain.cancelScheduledValues(now);
+    this.filterInGain.gain.setValueAtTime(this.filterInGain.gain.value, now);
+    this.filterInGain.gain.linearRampToValueAtTime(isBypassed ? 0.0 : 1.0, rampEnd);
+
+    this.filterOutGain.gain.cancelScheduledValues(now);
+    this.filterOutGain.gain.setValueAtTime(this.filterOutGain.gain.value, now);
+    this.filterOutGain.gain.linearRampToValueAtTime(wetTarget, rampEnd);
   }
 
   dispose(): void {

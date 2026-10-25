@@ -1,5 +1,7 @@
 import { CurvePreset, FullBreathCurveData } from '../../types';
 import { createDefaultBreathCurveData } from '../dsp/curveMath';
+import { sanitizeBreathCurveData } from './curveValidation';
+import { isRecord, MAX_USER_PRESETS, readStoredJson, requireStoredJson, writeStoredJson } from './safeStorage';
 
 const USER_PRESETS_STORAGE_KEY = 'synhale_user_curve_presets_v1';
 
@@ -274,71 +276,52 @@ export const FACTORY_CURVE_PRESETS: CurvePreset[] = [
 ];
 
 export function getUserCurvePresets(): CurvePreset[] {
-  if (typeof window === 'undefined' || !window.localStorage) {
-    return [];
-  }
-  try {
-    const raw = window.localStorage.getItem(USER_PRESETS_STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
+  const parsed = readStoredJson(USER_PRESETS_STORAGE_KEY);
+  if (!Array.isArray(parsed) || parsed.length > MAX_USER_PRESETS) return [];
+  const ids = new Set<string>();
+  return parsed.flatMap((raw): CurvePreset[] => {
+    if (!isRecord(raw) || typeof raw.id !== 'string' || !raw.id.trim() || !isRecord(raw.curveData)) return [];
+    const id = raw.id.trim().slice(0, 64);
+    if (ids.has(id)) return [];
+    ids.add(id);
+    return [{ id, name: typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim().slice(0, 64) : '自定义曲线',
+      category: 'user', curveData: sanitizeBreathCurveData(raw.curveData) }];
+  });
 }
 
 export function saveUserCurvePreset(name: string, curveData: FullBreathCurveData): CurvePreset {
-  const trimmed = name.trim() || '自定义曲线';
   const newPreset: CurvePreset = {
     id: `user-curve-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-    name: trimmed,
+    name: typeof name === 'string' && name.trim() ? name.trim().slice(0, 64) : '自定义曲线',
     category: 'user',
-    curveData: JSON.parse(JSON.stringify(curveData))
+    curveData: sanitizeBreathCurveData(curveData)
   };
-
-  if (typeof window !== 'undefined' && window.localStorage) {
-    const existing = getUserCurvePresets();
-    existing.push(newPreset);
-    window.localStorage.setItem(USER_PRESETS_STORAGE_KEY, JSON.stringify(existing));
-  }
-
+  const existing = getUserCurvePresets();
+  if (existing.length >= MAX_USER_PRESETS) throw new Error('预设数量已达上限，请先删除不再使用的预设。');
+  requireStoredJson(USER_PRESETS_STORAGE_KEY, [...existing, newPreset]);
   return newPreset;
 }
 
 export function updateUserCurvePreset(id: string, curveData: FullBreathCurveData): boolean {
-  if (typeof window === 'undefined' || !window.localStorage) return false;
   const existing = getUserCurvePresets();
   const targetIndex = existing.findIndex(p => p.id === id);
   if (targetIndex === -1) return false;
-
-  existing[targetIndex] = {
-    ...existing[targetIndex],
-    curveData: JSON.parse(JSON.stringify(curveData))
-  };
-  window.localStorage.setItem(USER_PRESETS_STORAGE_KEY, JSON.stringify(existing));
-  return true;
+  existing[targetIndex] = { ...existing[targetIndex], curveData: sanitizeBreathCurveData(curveData) };
+  return writeStoredJson(USER_PRESETS_STORAGE_KEY, existing);
 }
 
 export function renameUserCurvePreset(id: string, newName: string): boolean {
-  if (typeof window === 'undefined' || !window.localStorage) return false;
-  const trimmed = newName.trim();
+  const trimmed = typeof newName === 'string' ? newName.trim().slice(0, 64) : '';
   if (!trimmed) return false;
   const existing = getUserCurvePresets();
   const targetIndex = existing.findIndex(p => p.id === id);
   if (targetIndex === -1) return false;
-
-  existing[targetIndex] = {
-    ...existing[targetIndex],
-    name: trimmed
-  };
-  window.localStorage.setItem(USER_PRESETS_STORAGE_KEY, JSON.stringify(existing));
-  return true;
+  existing[targetIndex] = { ...existing[targetIndex], name: trimmed };
+  return writeStoredJson(USER_PRESETS_STORAGE_KEY, existing);
 }
 
-export function deleteUserCurvePreset(id: string): void {
-  if (typeof window === 'undefined' || !window.localStorage) return;
-  const existing = getUserCurvePresets().filter(p => p.id !== id);
-  window.localStorage.setItem(USER_PRESETS_STORAGE_KEY, JSON.stringify(existing));
+export function deleteUserCurvePreset(id: string): boolean {
+  return writeStoredJson(USER_PRESETS_STORAGE_KEY, getUserCurvePresets().filter(p => p.id !== id));
 }
 
 export function getAllCurvePresets(): CurvePreset[] {

@@ -6,7 +6,7 @@ import type {
   BreathStage
 } from '../types';
 import { BreathStateMachine } from './stateMachine';
-import { FACTORY_AUTOMATIONS, loadBreathConfig, FACTORY_RHYTHMS } from './storage';
+import { FACTORY_AUTOMATIONS, loadBreathConfig, FACTORY_RHYTHMS, validateAndRepairAutomations } from './storage';
 
 export type BreathTickSubscriber = (snapshot: BreathClockSnapshot) => void;
 export type StageChangeSubscriber = (
@@ -34,10 +34,11 @@ export class BreathEngine implements BreathEngineApi {
   private cycleSubscribers: Set<CycleCompleteSubscriber> = new Set();
 
   private animationFrameId: number | null = null;
-  private intervalTimerId: any = null;
+  private intervalTimerId: ReturnType<typeof setInterval> | null = null;
   private lastStage: BreathStage = 'inhale';
   private lastCycle: number = 0;
   private isDisposed: boolean = false;
+  private loopGeneration = 0;
 
   constructor(options?: BreathEngineOptions) {
     let rhythmConfig = options?.rhythm;
@@ -53,7 +54,7 @@ export class BreathEngine implements BreathEngineApi {
     }
 
     this.stateMachine = new BreathStateMachine({ rhythm: rhythmConfig });
-    this.automations = autoConfig ? [...autoConfig] : [...FACTORY_AUTOMATIONS];
+    this.automations = validateAndRepairAutomations(autoConfig ?? FACTORY_AUTOMATIONS);
     this.lastStage = this.stateMachine.getCurrentStage();
     this.lastCycle = this.stateMachine.getCycleCount();
 
@@ -136,14 +137,14 @@ export class BreathEngine implements BreathEngineApi {
    * Configures parameter automation curves
    */
   setAutomation(config: ParameterAutomationConfig[]): void {
-    this.automations = Array.isArray(config) ? [...config] : [...FACTORY_AUTOMATIONS];
+    this.automations = validateAndRepairAutomations(config);
   }
 
   /**
    * Retrieves active automation configs
    */
   getAutomation(): ParameterAutomationConfig[] {
-    return [...this.automations];
+    return validateAndRepairAutomations(this.automations);
   }
 
   /**
@@ -188,6 +189,7 @@ export class BreathEngine implements BreathEngineApi {
    * Manual clock tick (for unit test stepping or external sync)
    */
   tick(deltaSec?: number): BreathClockSnapshot {
+    if (this.isDisposed) return this.stateMachine.getSnapshot();
     const snapshot = this.stateMachine.tick(deltaSec);
     this.checkTransitionsAndNotify(snapshot);
     return snapshot;
@@ -197,8 +199,9 @@ export class BreathEngine implements BreathEngineApi {
    * Disposes the engine and releases all timers and subscribers
    */
   dispose(): void {
-    this.pause();
+    if (this.isDisposed) return;
     this.isDisposed = true;
+    this.stateMachine.pause();
     this.stopLoop();
     this.tickSubscribers.clear();
     this.stageSubscribers.clear();
@@ -207,15 +210,18 @@ export class BreathEngine implements BreathEngineApi {
 
   private startLoop(): void {
     this.stopLoop();
+    const generation = this.loopGeneration;
 
     if (typeof requestAnimationFrame !== 'undefined') {
       const loop = () => {
-        if (!this.stateMachine.getIsPlaying() || this.isDisposed) {
+        if (!this.stateMachine.getIsPlaying() || this.isDisposed || generation !== this.loopGeneration) {
           return;
         }
         const snapshot = this.stateMachine.tick();
         this.checkTransitionsAndNotify(snapshot);
-        this.animationFrameId = requestAnimationFrame(loop);
+        if (this.stateMachine.getIsPlaying() && !this.isDisposed && generation === this.loopGeneration) {
+          this.animationFrameId = requestAnimationFrame(loop);
+        }
       };
       this.animationFrameId = requestAnimationFrame(loop);
     } else {
@@ -225,13 +231,14 @@ export class BreathEngine implements BreathEngineApi {
           this.stopLoop();
           return;
         }
-        const snapshot = this.stateMachine.tick(0.016);
+        const snapshot = this.stateMachine.tick();
         this.checkTransitionsAndNotify(snapshot);
       }, 16);
     }
   }
 
   private stopLoop(): void {
+    this.loopGeneration++;
     if (this.animationFrameId !== null && typeof cancelAnimationFrame !== 'undefined') {
       cancelAnimationFrame(this.animationFrameId);
       this.animationFrameId = null;

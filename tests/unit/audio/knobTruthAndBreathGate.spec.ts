@@ -154,12 +154,14 @@ describe('Knob-Truth Principle & Monophonic Breath Gate Lifecycle Suite', () => 
       masterPan: 0.0,
       lfo2: { rate: 1.0, depth: 0.8, shape: 'sine', bypass: false }
     });
+    ctx.advanceTime(1); // Allow scheduled anti-click ramps to settle.
 
     // 1. Without route: panner strictly stays at base pan (0.0)
     engine.setModulationRoutes({});
     engine.updateBreathModulation(0.5, 'inhale', 0.5);
+    ctx.advanceTime(1); // Allow scheduled anti-click ramps to settle.
     const panner = (engine as any).panner;
-    expect(panner.pan.value).toBe(0.0);
+    expect(panner.pan.value).toBeCloseTo(0.0, 6);
 
     // 2. With matrix route to master-pan:
     engine.setModulationRoute('master-pan', {
@@ -172,6 +174,7 @@ describe('Knob-Truth Principle & Monophonic Breath Gate Lifecycle Suite', () => 
     // Advance time to 0.25s (quarter cycle of 1Hz sine -> peak 1.0)
     ctx.advanceTime(0.25);
     engine.updateBreathModulation(0.5, 'inhale', 0.5);
+    ctx.advanceTime(1); // Allow scheduled anti-click ramps to settle.
 
     // Live value is peak (1.0) * lfo2.depth (0.8) = 0.8; multiplied by route.depth (0.5) = 0.4
     expect(panner.pan.value).toBeGreaterThan(0.2);
@@ -180,8 +183,10 @@ describe('Knob-Truth Principle & Monophonic Breath Gate Lifecycle Suite', () => 
     engine.updateEffects({
       lfo2: { bypass: true }
     });
+    ctx.advanceTime(1); // Allow scheduled anti-click ramps to settle.
     engine.updateBreathModulation(0.5, 'inhale', 0.5);
-    expect(panner.pan.value).toBe(0.0);
+    ctx.advanceTime(1); // Allow scheduled anti-click ramps to settle.
+    expect(panner.pan.value).toBeCloseTo(0.0, 6);
 
     engine.dispose();
   });

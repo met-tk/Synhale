@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 
 import type { ModulationRoute } from '../../../types';
 
@@ -10,6 +10,7 @@ export function applyMagneticCenterDetent(val: number): number {
 export interface BipolarFaderProps {
   id: string;
   label: string;
+  ariaLabel?: string;
   value: number;
   min?: number;
   max?: number;
@@ -30,6 +31,7 @@ export interface BipolarFaderProps {
 export const BipolarFader: React.FC<BipolarFaderProps> = ({
   id,
   label,
+  ariaLabel,
   value,
   min: propMin,
   max: propMax,
@@ -50,8 +52,21 @@ export const BipolarFader: React.FC<BipolarFaderProps> = ({
   const max = propMax ?? 1.0;
   const trackRef = useRef<HTMLDivElement>(null);
   const pointerStartRef = useRef<{ y: number; val: number } | null>(null);
-  const longPressTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+
+  useEffect(() => {
+    if (disabled) {
+      pointerStartRef.current = null;
+      setIsDragging(false);
+    }
+    return () => {
+      if (longPressTimerRef.current !== null) {
+        clearTimeout(longPressTimerRef.current);
+        longPressTimerRef.current = null;
+      }
+    };
+  }, [disabled]);
 
   // Clamp & apply magnetic detent if bipolar
   const rawClamped = Math.max(min, Math.min(max, value));
@@ -126,8 +141,9 @@ export const BipolarFader: React.FC<BipolarFaderProps> = ({
   }
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (disabled) return;
+    if (disabled || e.button !== 0) return;
     e.preventDefault();
+    e.currentTarget.focus({ preventScroll: true });
     if (typeof e.currentTarget.setPointerCapture === 'function') {
       try {
         e.currentTarget.setPointerCapture(e.pointerId);
@@ -145,6 +161,7 @@ export const BipolarFader: React.FC<BipolarFaderProps> = ({
     if (onLongPress) {
       if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
       longPressTimerRef.current = setTimeout(() => {
+        longPressTimerRef.current = null;
         onLongPress();
       }, 320);
     }
@@ -162,7 +179,7 @@ export const BipolarFader: React.FC<BipolarFaderProps> = ({
     // Dragging up (negative dy) increases value
     const pixelDelta = -dy;
     const speed = e.shiftKey ? 0.2 : 1.0;
-    const valueDelta = (pixelDelta / (height - 24)) * range * speed;
+    const valueDelta = (pixelDelta / Math.max(1, height - 24)) * range * speed;
     let nextVal = pointerStartRef.current.val + valueDelta;
 
     if (bipolar) {
@@ -204,6 +221,11 @@ export const BipolarFader: React.FC<BipolarFaderProps> = ({
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (disabled) return;
+    if (onLongPress && (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10'))) {
+      e.preventDefault();
+      onLongPress();
+      return;
+    }
     const multiplier = e.shiftKey ? 0.2 : 1.0;
     let nextVal = effectiveValue;
 
@@ -222,7 +244,11 @@ export const BipolarFader: React.FC<BipolarFaderProps> = ({
     }
 
     if (bipolar) {
+      const requested = nextVal;
       nextVal = applyMagneticCenterDetent(nextVal);
+      // A keyboard step must be able to leave the magnetic center.
+      if (effectiveValue === 0 && nextVal === 0 && requested !== 0) nextVal = Math.sign(requested) * 0.03;
+      nextVal = Math.max(min, Math.min(max, nextVal));
     } else {
       nextVal = Math.max(min, Math.min(max, nextVal));
     }
@@ -249,7 +275,7 @@ export const BipolarFader: React.FC<BipolarFaderProps> = ({
       {/* Label */}
       <span
         title={label}
-        className="text-[9.5px] uppercase tracking-wider text-neutral-600 dark:text-slate-400 font-medium mb-1 min-w-[56px] max-w-[80px] text-center leading-tight break-words line-clamp-2"
+        className="text-[9.5px] uppercase tracking-wider text-neutral-600 dark:text-slate-400 font-medium mb-2.5 min-w-[56px] max-w-[84px] text-center leading-tight break-words line-clamp-2 select-none"
       >
         {label}
       </span>
@@ -260,8 +286,10 @@ export const BipolarFader: React.FC<BipolarFaderProps> = ({
         id={id}
         role="slider"
         aria-orientation="vertical"
+        aria-disabled={disabled}
+        aria-haspopup={onLongPress ? 'dialog' : undefined}
         tabIndex={disabled ? -1 : 0}
-        aria-label={label}
+        aria-label={ariaLabel || label}
         aria-valuenow={effectiveValue}
         aria-valuemin={min}
         aria-valuemax={max}
@@ -270,6 +298,7 @@ export const BipolarFader: React.FC<BipolarFaderProps> = ({
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
+        onLostPointerCapture={handlePointerUp}
         onDoubleClick={handleDoubleClick}
         onKeyDown={handleKeyDown}
         className="relative flex items-center justify-center cursor-pointer touch-none outline-none focus-visible:ring-1 focus-visible:ring-sky-500 min-w-[44px]"
@@ -340,7 +369,7 @@ export const BipolarFader: React.FC<BipolarFaderProps> = ({
       </div>
 
       {/* Value Readout */}
-      <span className="mt-1 font-mono tabular-nums text-[11px] text-neutral-800 dark:text-slate-300">
+      <span className="mt-2.5 font-mono tabular-nums text-[11px] text-neutral-800 dark:text-slate-300 select-none">
         {displayString}
       </span>
     </div>

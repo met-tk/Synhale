@@ -25,6 +25,7 @@
       "electron/**/*"
     ],
     "win": {
+      "icon": "public/icons/synhale.ico",
       "target": [
         "nsis",
         "portable"
@@ -43,6 +44,11 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
+  "overrides": {
+    "tailwindcss": {
+      "postcss-selector-parser": "7.1.6"
+    }
+  },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.6.3",
     "@testing-library/react": "^16.2.0",
@@ -58,6 +64,6 @@
     "tailwindcss": "^3.4.17",
     "typescript": "^5.8.2",
     "vite": "^6.2.0",
-    "vitest": "^3.0.7"
+    "vitest": "4.1.11"
   }
 }

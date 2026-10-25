@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState, useContext } from 'react';
 import { X, Check, Edit2, Trash2, Volume2 } from 'lucide-react';
 import { ThemeContext } from '../../theme/ThemeProvider';
+import { useModalDialog } from '../../hooks/useModalDialog';
 
 export function shouldDismissDrawer(startY: number, currentY: number): boolean {
   const deltaY = currentY - startY;
@@ -51,28 +52,19 @@ export const BottomSheetDrawer: React.FC<BottomSheetDrawerProps> = ({
   const isDark = propIsDark ?? themeCtx?.isDark ?? true;
   const touchStartYRef = useRef<number | null>(null);
   const [dragOffset, setDragOffset] = useState<number>(0);
+  const dialogRef = useModalDialog(isOpen, onClose);
 
   useEffect(() => {
     if (!isOpen) {
       setDragOffset(0);
-      return;
+      touchStartYRef.current = null;
     }
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        onClose();
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [isOpen, onClose]);
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
     touchStartYRef.current = e.clientY;
     if (typeof e.currentTarget.setPointerCapture === 'function') {
       try {
@@ -127,15 +119,17 @@ export const BottomSheetDrawer: React.FC<BottomSheetDrawerProps> = ({
 
       {/* Drawer Container */}
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-label={title}
         style={{
           transform: dragOffset > 0 ? `translateY(${dragOffset}px)` : 'none'
         }}
-        className={`fixed inset-x-0 bottom-0 z-50 rounded-t-2xl border-t p-6 shadow-2xl ${
+        className={`fixed inset-x-0 bottom-0 z-50 rounded-t-2xl border-t p-4 sm:p-6 shadow-2xl ${
           columns === 2 ? 'max-w-2xl' : 'max-w-xl'
-        } mx-auto w-full transition-transform duration-100 ease-out max-h-[85vh] flex flex-col ${
+        } mx-auto w-full transition-transform duration-100 ease-out max-h-[85vh] max-md:max-h-[88dvh] flex flex-col ${
           isDark
             ? 'bg-neutral-900 border-neutral-800 text-slate-100'
             : 'bg-white border-neutral-200 text-neutral-900 shadow-2xl'
@@ -146,7 +140,10 @@ export const BottomSheetDrawer: React.FC<BottomSheetDrawerProps> = ({
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
-          onPointerCancel={handlePointerUp}
+          onPointerCancel={() => {
+            touchStartYRef.current = null;
+            setDragOffset(0);
+          }}
           className="cursor-grab active:cursor-grabbing w-full py-2 -mt-4 mb-2 flex items-center justify-center touch-none"
         >
           <div className={`w-8 h-1 rounded-full ${isDark ? 'bg-neutral-600' : 'bg-neutral-300'}`} />
@@ -156,7 +153,7 @@ export const BottomSheetDrawer: React.FC<BottomSheetDrawerProps> = ({
         <div className={`flex items-center justify-between pb-3 border-b mb-3 ${
           isDark ? 'border-neutral-800' : 'border-neutral-200'
         }`}>
-          <div className="flex items-baseline gap-2">
+          <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
             <h2 className={`text-sm font-semibold tracking-wider uppercase ${
               isDark ? 'text-slate-200' : 'text-neutral-900'
             }`}>
@@ -170,7 +167,7 @@ export const BottomSheetDrawer: React.FC<BottomSheetDrawerProps> = ({
               </span>
             )}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2">
             {headerAction}
             <button
               type="button"
@@ -186,27 +183,25 @@ export const BottomSheetDrawer: React.FC<BottomSheetDrawerProps> = ({
         </div>
 
         {/* Items List */}
-        <div className={`overflow-y-auto flex-1 pr-1 ${
+        <div className={`overflow-y-auto overscroll-contain min-h-0 flex-1 pr-1 ${
           columns === 2
-            ? 'grid grid-cols-2 gap-2 auto-rows-max'
+            ? 'grid grid-cols-1 sm:grid-cols-2 gap-2 auto-rows-max'
             : `divide-y ${isDark ? 'divide-neutral-800/60' : 'divide-neutral-100'}`
         }`}>
           {items.length === 0 ? (
             <div className={`py-8 text-center text-xs ${
               isDark ? 'text-slate-400' : 'text-neutral-400'
             }`}>
-              No items available
+              暂无内容
             </div>
           ) : (
             items.map(item => {
               const isSelected = item.id === selectedId;
               const isGrid = columns === 2;
               return (
-                <button
+                <div
                   key={item.id}
-                  type="button"
-                  onClick={() => handleItemClick(item.id)}
-                  className={`min-h-[48px] px-3 py-2 flex items-center justify-between text-left rounded transition-colors ${
+                  className={`min-w-0 flex items-center justify-between text-left rounded transition-colors ${
                     isGrid
                       ? isDark
                         ? isSelected
@@ -224,6 +219,12 @@ export const BottomSheetDrawer: React.FC<BottomSheetDrawerProps> = ({
                           : 'w-full text-neutral-700 hover:bg-neutral-100'
                   }`}
                 >
+                  <button
+                    type="button"
+                    onClick={() => handleItemClick(item.id)}
+                    aria-pressed={isSelected}
+                    className="min-h-[48px] px-3 py-2 flex flex-1 min-w-0 items-center text-left rounded"
+                  >
                   <div className="flex flex-col flex-1 mr-2 min-w-0">
                     <span className="text-xs truncate">{item.label}</span>
                     {!hideDescription && item.description && (
@@ -255,33 +256,6 @@ export const BottomSheetDrawer: React.FC<BottomSheetDrawerProps> = ({
                       </div>
                     )}
 
-                    {/* Audio Preview Audition Button */}
-                    {item.onPreviewAudio && (
-                      <span
-                        role="button"
-                        tabIndex={0}
-                        onClick={e => {
-                          e.stopPropagation();
-                          item.onPreviewAudio?.(item.id, e);
-                        }}
-                        onKeyDown={e => {
-                          if (e.key === 'Enter' || e.key === ' ') {
-                            e.stopPropagation();
-                            item.onPreviewAudio?.(item.id, e as any);
-                          }
-                        }}
-                        aria-label="Preview waveform audio"
-                        title="试听波形"
-                        className={`p-1 rounded transition-colors ${
-                          isDark
-                            ? 'text-slate-400 hover:text-sky-400 hover:bg-neutral-700/60'
-                            : 'text-neutral-500 hover:text-sky-600 hover:bg-neutral-200'
-                        }`}
-                      >
-                        <Volume2 size={13} strokeWidth={1.8} />
-                      </span>
-                    )}
-
                     {item.badge && (
                       <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
                         isDark ? 'bg-neutral-800 text-slate-400 border-neutral-700' : 'bg-neutral-100 text-neutral-600 border-neutral-200'
@@ -289,64 +263,72 @@ export const BottomSheetDrawer: React.FC<BottomSheetDrawerProps> = ({
                         {item.badge}
                       </span>
                     )}
+                    {isSelected && <Check size={14} strokeWidth={2} className="text-sky-400" />}
+                  </div>
+                  </button>
+                  <div className="flex items-center gap-1 shrink-0 pr-2">
+
+                    {/* Audio Preview Audition Button */}
+                    {item.onPreviewAudio && (
+                      <button
+                        type="button"
+                        onClick={e => {
+                          e.stopPropagation();
+                          item.onPreviewAudio?.(item.id, e);
+                        }}
+                        aria-label="Preview waveform audio"
+                        title="试听波形"
+                        className={`p-2 rounded transition-colors ${
+                          isDark
+                            ? 'text-slate-400 hover:text-sky-400 hover:bg-neutral-700/60'
+                            : 'text-neutral-500 hover:text-sky-600 hover:bg-neutral-200'
+                        }`}
+                      >
+                        <Volume2 size={13} strokeWidth={1.8} />
+                      </button>
+                    )}
 
                     {/* Edit Action Button */}
                     {item.onEdit && (
-                      <span
-                        role="button"
-                        tabIndex={0}
+                      <button
+                        type="button"
                         onClick={e => {
                           e.stopPropagation();
                           item.onEdit?.(item.id, e);
                         }}
-                        onKeyDown={e => {
-                          if (e.key === 'Enter' || e.key === ' ') {
-                            e.stopPropagation();
-                            item.onEdit?.(item.id, e as any);
-                          }
-                        }}
                         aria-label="Edit preset"
                         title="重命名预设"
-                        className={`p-1 rounded transition-colors ${
+                        className={`p-2 rounded transition-colors ${
                           isDark
                             ? 'text-slate-400 hover:text-sky-300 hover:bg-neutral-700/60'
                             : 'text-neutral-500 hover:text-sky-600 hover:bg-neutral-200'
                         }`}
                       >
                         <Edit2 size={12} strokeWidth={1.6} />
-                      </span>
+                      </button>
                     )}
 
                     {/* Delete Action Button */}
                     {item.onDelete && (
-                      <span
-                        role="button"
-                        tabIndex={0}
+                      <button
+                        type="button"
                         onClick={e => {
                           e.stopPropagation();
                           item.onDelete?.(item.id, e);
                         }}
-                        onKeyDown={e => {
-                          if (e.key === 'Enter' || e.key === ' ') {
-                            e.stopPropagation();
-                            item.onDelete?.(item.id, e as any);
-                          }
-                        }}
                         aria-label="Delete preset"
                         title="删除预设"
-                        className={`p-1 rounded transition-colors ${
+                        className={`p-2 rounded transition-colors ${
                           isDark
                             ? 'text-slate-400 hover:text-rose-400 hover:bg-neutral-700/60'
                             : 'text-neutral-500 hover:text-rose-600 hover:bg-rose-50'
                         }`}
                       >
                         <Trash2 size={12} strokeWidth={1.6} />
-                      </span>
+                      </button>
                     )}
-
-                    {isSelected && <Check size={14} strokeWidth={2} className="text-sky-400" />}
                   </div>
-                </button>
+                </div>
               );
             })
           )}

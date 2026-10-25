@@ -40,15 +40,15 @@ describe('SettingsModal UI Component', () => {
     );
 
     // Title and Dialog
-    expect(screen.getByRole('dialog', { name: /偏好设置/ })).toBeDefined();
-    expect(screen.getByText(/系统设置与偏好/)).toBeDefined();
+    expect(screen.getByRole('dialog', { name: /设置 · Settings/ })).toBeDefined();
+    expect(screen.getByText(/设置 · Settings/)).toBeDefined();
 
     // Theme Switcher Section
     expect(screen.getByLabelText('深色模式')).toBeDefined();
     expect(screen.getByLabelText('浅色模式')).toBeDefined();
 
     // Breath Cue Section
-    expect(screen.getByText(/呼吸阶段转换提示音/)).toBeDefined();
+    expect(screen.getByText(/转换提示音/)).toBeDefined();
     expect(screen.getByRole('switch', { name: /提示音总开关/ })).toBeDefined();
 
     // 4 Transition Nodes
@@ -182,5 +182,59 @@ describe('SettingsModal UI Component', () => {
     const text = container.textContent || '';
     const emojiRegex = /[\u{1F300}-\u{1F9FF}|\u{2600}-\u{26FF}|\u{2700}-\u{27BF}]/u;
     expect(emojiRegex.test(text)).toBe(false);
+  });
+
+  it('renders indicator opacity slider and responds to change events', () => {
+    const mockOnOpacityChange = vi.fn();
+    render(
+      React.createElement(SettingsModal, {
+        isOpen: true,
+        onClose: mockOnClose,
+        isDark: true,
+        onToggleTheme: mockOnToggleTheme,
+        cueSettings: DEFAULT_CUE_SETTINGS,
+        onCueSettingsChange: mockOnCueSettingsChange,
+        indicatorOpacity: 20,
+        onIndicatorOpacityChange: mockOnOpacityChange
+      })
+    );
+
+    expect(screen.getByText(/指示器透明度/)).toBeDefined();
+    expect(screen.getByText('20%')).toBeDefined();
+
+    const slider = screen.getByLabelText('透明度滑块');
+    fireEvent.change(slider, { target: { value: '45' } });
+    expect(mockOnOpacityChange).toHaveBeenCalledWith(45);
+
+    // Quick preset click
+    const presetBtn50 = screen.getByRole('button', { name: '50% 适中' });
+    fireEvent.click(presetBtn50);
+    expect(mockOnOpacityChange).toHaveBeenCalledWith(50);
+  });
+
+  it('renders precision switcher and triggers onIndicatorPrecisionChange', () => {
+    const mockOnPrecisionChange = vi.fn();
+    render(
+      React.createElement(SettingsModal, {
+        isOpen: true,
+        onClose: mockOnClose,
+        isDark: true,
+        onToggleTheme: mockOnToggleTheme,
+        cueSettings: DEFAULT_CUE_SETTINGS,
+        onCueSettingsChange: mockOnCueSettingsChange,
+        indicatorPrecision: 'decimal',
+        onIndicatorPrecisionChange: mockOnPrecisionChange
+      })
+    );
+
+    expect(screen.getByText(/显示精度/)).toBeDefined();
+
+    const integerBtn = screen.getByRole('button', { name: '单个数字 · 4' });
+    fireEvent.click(integerBtn);
+    expect(mockOnPrecisionChange).toHaveBeenCalledWith('integer');
+
+    const decimalBtn = screen.getByRole('button', { name: '一位小数 · 4.2' });
+    fireEvent.click(decimalBtn);
+    expect(mockOnPrecisionChange).toHaveBeenCalledWith('decimal');
   });
 });

@@ -10,13 +10,33 @@ body {
   margin: 0;
   padding: 0;
   min-height: 100vh;
-  background-color: #0a0b0d;
+  background-color: #09090b;
   color: #f8fafc;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   overflow: hidden;
   user-select: none;
   -webkit-user-select: none;
   -webkit-user-drag: none;
+}
+
+/* Keep keyboard navigation visible across compact instrument controls. */
+:where(button, a, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid #38bdf8;
+  outline-offset: 3px;
+}
+
+input, textarea {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* Frameless Window Desktop Drag Regions */
@@ -33,21 +53,355 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* Breath bead strand: one-shot pulse when a bead lights up (tone-neutral scale only) */
+@keyframes synhaleBeadPulse {
+  0% {
+    transform: scale(1);
+  }
+  35% {
+    transform: scale(1.55);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.synhale-bead-pulse {
+  animation: synhaleBeadPulse 700ms cubic-bezier(0.22, 1, 0.36, 1) 1;
+  transform-origin: center;
+  transform-box: fill-box;
+}
+
+/* Breath bead strand: collective dim & brighten when the mala fills (session conclusion) */
+@keyframes synhaleStrandBreathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  40% {
+    opacity: 0.55;
+  }
+}
+
+.synhale-strand-breathe {
+  animation: synhaleStrandBreathe 2600ms ease-in-out 1;
+}
+
+/*
+ * Deck console palette remap: the hardware deck's structural surfaces use flat
+ * neutral utilities; inside the deck drawer scope they resolve to the active
+ * soft palette's layered tints so the console follows the theme. Functional
+ * status colors (LED emerald/slate chips) and translucent variants at /60 and
+ * below keep their identity — the latter blend naturally over tinted parents.
+ */
+.synhale-deck-scope .bg-\[\#07080c\]\/90,
+.synhale-deck-scope .bg-\[\#090b10\],
+.synhale-deck-scope .bg-neutral-950,
+.synhale-deck-scope .bg-neutral-950\/95,
+.synhale-deck-scope .bg-neutral-950\/90,
+.synhale-deck-scope .bg-neutral-950\/80 {
+  background-color: var(--synhale-deck-recess);
+}
+
+.synhale-deck-scope .bg-neutral-900,
+.synhale-deck-scope .bg-neutral-900\/80 {
+  background-color: var(--synhale-deck-surface);
+}
+
+.synhale-deck-scope .bg-neutral-800 {
+  background-color: var(--synhale-deck-raised);
+}
+
+.synhale-deck-scope .bg-white,
+.synhale-deck-scope .bg-white\/95,
+.synhale-deck-scope .bg-white\/90,
+.synhale-deck-scope .bg-white\/80,
+.synhale-deck-scope .bg-white\/70 {
+  background-color: var(--synhale-deck-card);
+}
+
+.synhale-deck-scope .bg-neutral-50 {
+  background-color: var(--synhale-deck-soft);
+}
+
+.synhale-deck-scope .bg-neutral-100 {
+  background-color: var(--synhale-deck-tint);
+}
+
+/*
+ * Deck accent remap: the interactive sky family resolves to the active
+ * palette's accent ramp (identical to sky on the default palettes). Alpha
+ * variants preserve their transparency via color-mix.
+ */
+.synhale-deck-scope .bg-sky-400 {
+  background-color: var(--acc-400);
+}
+.synhale-deck-scope .bg-sky-500 {
+  background-color: var(--acc-500);
+}
+.synhale-deck-scope .bg-sky-500\/20,
+.synhale-deck-scope .hover\:bg-sky-500\/20:hover {
+  background-color: color-mix(in srgb, var(--acc-500) 20%, transparent);
+}
+.synhale-deck-scope .bg-sky-500\/25,
+.synhale-deck-scope .bg-sky-500\/30,
+.synhale-deck-scope .hover\:bg-sky-500\/30:hover {
+  background-color: color-mix(in srgb, var(--acc-500) 25%, transparent);
+}
+.synhale-deck-scope .bg-sky-50,
+.synhale-deck-scope .bg-sky-50\/70,
+.synhale-deck-scope .bg-sky-50\/50,
+.synhale-deck-scope .hover\:bg-sky-50:hover,
+.synhale-deck-scope .hover\:bg-sky-50\/60:hover {
+  background-color: var(--acc-50);
+}
+.synhale-deck-scope .bg-sky-100,
+.synhale-deck-scope .bg-sky-100\/80,
+.synhale-deck-scope .hover\:bg-sky-100:hover {
+  background-color: var(--acc-100);
+}
+.synhale-deck-scope .bg-sky-950\/10,
+.synhale-deck-scope .bg-sky-950\/20 {
+  background-color: color-mix(in srgb, var(--acc-950) 20%, transparent);
+}
+.synhale-deck-scope .bg-sky-950\/30,
+.synhale-deck-scope .hover\:bg-sky-950\/30:hover {
+  background-color: color-mix(in srgb, var(--acc-950) 30%, transparent);
+}
+.synhale-deck-scope .bg-sky-950\/40,
+.synhale-deck-scope .hover\:bg-sky-950\/40:hover {
+  background-color: color-mix(in srgb, var(--acc-950) 40%, transparent);
+}
+.synhale-deck-scope .bg-sky-950\/70,
+.synhale-deck-scope .bg-sky-950\/80,
+.synhale-deck-scope .bg-sky-950\/85,
+.synhale-deck-scope .bg-sky-950\/90 {
+  background-color: color-mix(in srgb, var(--acc-950) 82%, transparent);
+}
+.synhale-deck-scope .hover\:bg-sky-900\/40:hover {
+  background-color: color-mix(in srgb, var(--acc-900) 40%, transparent);
+}
+.synhale-deck-scope .hover\:bg-sky-600:hover {
+  background-color: var(--acc-600);
+}
+
+.synhale-deck-scope .text-sky-200 {
+  color: var(--acc-200);
+}
+.synhale-deck-scope .text-sky-300 {
+  color: var(--acc-300);
+}
+.synhale-deck-scope .text-sky-400,
+.synhale-deck-scope .text-sky-400\/90,
+.synhale-deck-scope .text-sky-400\/70 {
+  color: var(--acc-400);
+}
+.synhale-deck-scope .text-sky-600 {
+  color: var(--acc-600);
+}
+.synhale-deck-scope .text-sky-700 {
+  color: var(--acc-700);
+}
+.synhale-deck-scope .text-sky-800 {
+  color: var(--acc-800);
+}
+.synhale-deck-scope .hover\:text-sky-100:hover {
+  color: var(--acc-100);
+}
+.synhale-deck-scope .hover\:text-sky-900:hover {
+  color: var(--acc-900);
+}
+
+.synhale-deck-scope .border-sky-200,
+.synhale-deck-scope .border-sky-200\/80 {
+  border-color: var(--acc-200);
+}
+.synhale-deck-scope .border-sky-300 {
+  border-color: var(--acc-300);
+}
+.synhale-deck-scope .border-sky-400,
+.synhale-deck-scope .border-sky-400\/50,
+.synhale-deck-scope .border-sky-400\/60,
+.synhale-deck-scope .border-sky-400\/80,
+.synhale-deck-scope .hover\:border-sky-400:hover {
+  border-color: var(--acc-400);
+}
+.synhale-deck-scope .border-sky-500,
+.synhale-deck-scope .border-sky-500\/30,
+.synhale-deck-scope .border-sky-500\/40,
+.synhale-deck-scope .border-sky-500\/50,
+.synhale-deck-scope .border-sky-500\/60,
+.synhale-deck-scope .border-sky-500\/70,
+.synhale-deck-scope .hover\:border-sky-500:hover,
+.synhale-deck-scope .hover\:border-sky-500\/60:hover {
+  border-color: color-mix(in srgb, var(--acc-500) 55%, transparent);
+}
+.synhale-deck-scope .border-sky-600 {
+  border-color: var(--acc-600);
+}
+.synhale-deck-scope .border-sky-800\/40 {
+  border-color: color-mix(in srgb, var(--acc-800) 40%, transparent);
+}
+.synhale-deck-scope .border-sky-900\/30 {
+  border-color: color-mix(in srgb, var(--acc-900) 30%, transparent);
+}
+
+.synhale-deck-scope .ring-sky-400,
+.synhale-deck-scope .ring-sky-400\/80 {
+  --tw-ring-color: var(--acc-400);
+}
+.synhale-deck-scope .ring-sky-500 {
+  --tw-ring-color: var(--acc-500);
+}
+
+.synhale-deck-scope .accent-sky-400 {
+  accent-color: var(--acc-400);
+}
+
+/* Accent glow shadows */
+.synhale-deck-scope .shadow-\[0_0_15px_rgba\(56\,189\,248\,0\.25\)\] {
+  box-shadow: 0 0 15px color-mix(in srgb, var(--acc-400) 25%, transparent);
+}
+.synhale-deck-scope .shadow-\[0_0_8px_rgba\(56\,189\,248\,0\.25\)\] {
+  box-shadow: 0 0 8px color-mix(in srgb, var(--acc-400) 25%, transparent);
+}
+.synhale-deck-scope .shadow-\[0_0_12px_rgba\(56\,189\,248\,0\.2\)\] {
+  box-shadow: 0 0 12px color-mix(in srgb, var(--acc-400) 20%, transparent);
+}
+.synhale-deck-scope .hover\:shadow-\[0_0_12px_rgba\(56\,189\,248\,0\.18\)\]:hover {
+  box-shadow: 0 0 12px color-mix(in srgb, var(--acc-400) 18%, transparent);
+}
+.synhale-deck-scope .shadow-\[0_0_10px_rgba\(56\,189\,248\,0\.08\)\] {
+  box-shadow: 0 0 10px color-mix(in srgb, var(--acc-400) 8%, transparent);
+}
+.synhale-deck-scope .shadow-\[0_0_6px_\#38bdf8\] {
+  box-shadow: 0 0 6px var(--acc-400);
+}
+.synhale-deck-scope .shadow-\[0_0_10px_\#38bdf8\] {
+  box-shadow: 0 0 10px var(--acc-400);
+}
+
+/* Structural hairlines follow the palette tint */
+.synhale-deck-scope .border-neutral-800,
+.synhale-deck-scope .border-neutral-800\/60,
+.synhale-deck-scope .border-neutral-800\/70,
+.synhale-deck-scope .border-neutral-800\/80,
+.synhale-deck-scope .border-neutral-800\/90,
+.synhale-deck-scope .border-neutral-900 {
+  border-color: var(--deck-border);
+}
+.synhale-deck-scope .border-neutral-700 {
+  border-color: var(--deck-border-strong);
+}
+.synhale-deck-scope .border-neutral-200,
+.synhale-deck-scope .border-neutral-200\/90 {
+  border-color: var(--deck-border-light);
+}
+.synhale-deck-scope .border-neutral-300 {
+  border-color: var(--deck-border-light-strong);
+}
+
+/* dark: structural variants (faders etc.) follow the palette in dark mode */
+.dark .synhale-deck-scope .dark\:bg-neutral-900,
+.dark .synhale-deck-scope .dark\:bg-neutral-900\/60 {
+  background-color: var(--synhale-deck-surface);
+}
+.dark .synhale-deck-scope .dark\:bg-neutral-800 {
+  background-color: var(--synhale-deck-raised);
+}
+
 /* Custom scrollbars for industrial theme */
+:root {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 0, 0, 0.16) transparent;
+}
+
+:root.dark,
+.dark {
+  scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
+}
+
 ::-webkit-scrollbar {
   width: 4px;
   height: 4px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #0a0b0d;
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #262a34;
-  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.16);
+  border-radius: 9999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #3b4252;
+  background: rgba(0, 0, 0, 0.28);
+}
+
+.dark ::-webkit-scrollbar-thumb,
+:root.dark ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: 9999px;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover,
+:root.dark ::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.28);
+}
+
+/* Universal no-scrollbar utility to eliminate ugly native scrollbars */
+.no-scrollbar::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+.no-scrollbar {
+  -ms-overflow-style: none !important;
+  scrollbar-width: none !important;
+}
+
+/*
+ * Mobile touch hardening (narrow viewports only — desktop rendering untouched).
+ * - kill iOS tap highlight & long-pass callout on a fully custom control surface
+ * - disable double-tap zoom delay on interactive controls (knobs keep their
+ *   stricter touch-none so drags never get stolen by page panning)
+ * - stop rubber-band overscroll from fighting the fullscreen canvas
+ */
+@media (max-width: 767px) {
+  html,
+  body {
+    overscroll-behavior: none;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+  }
+
+  button,
+  a,
+  [role='button'] {
+    touch-action: manipulation;
+  }
+
+  /* Momentum panning for the wide hardware deck rail */
+  .synhale-deck-scope {
+    -webkit-overflow-scrolling: touch;
+    /* Keep the scrollbar gutter reserved so clientWidth (and thus the fit
+       zoom) stays constant while cards collapse or expand mid-session. */
+    scrollbar-gutter: stable;
+  }
+
+  /*
+   * Deck fit-to-width scaling: the 900px hardware console rail zooms down to
+   * the viewport so the full signal chain is visible at a glance. --deck-fit-zoom
+   * is maintained by App.tsx (viewport width / 900, floored at 0.36); native
+   * pinch-zoom still magnifies for detail work. Gated to narrow viewports —
+   * desktop rendering is untouched.
+   */
+  .synhale-deck-fit {
+    zoom: var(--deck-fit-zoom, 0.42);
+  }
 }

@@ -40,10 +40,14 @@ globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise
       const fs = await import('fs');
       const path = await import('path');
       const cleanPath = urlStr.replace(/^\.?\//, '');
-      const fullPath = path.resolve(process.cwd(), 'public', cleanPath);
-      if (fs.existsSync(fullPath)) {
-        const buffer = fs.readFileSync(fullPath);
-        return new Response(buffer, { status: 200, headers: { 'Content-Type': 'audio/mpeg' } });
+      const publicDir = path.resolve(process.cwd(), 'public');
+      const fullPath = path.resolve(publicDir, cleanPath);
+      // 路径穿越防护：最终路径必须仍位于 public 目录内
+      if (fullPath === publicDir || fullPath.startsWith(publicDir + path.sep)) {
+        if (fs.existsSync(fullPath)) {
+          const buffer = fs.readFileSync(fullPath);
+          return new Response(buffer, { status: 200, headers: { 'Content-Type': 'audio/mpeg' } });
+        }
       }
     } catch {
       // Fall through to original fetch

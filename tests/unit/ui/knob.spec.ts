@@ -233,7 +233,7 @@ describe('Rotary Knob & Modulation Card (F23)', () => {
     fireEvent.click(screen.getByText('LFO 1'));
 
     // Click Assign
-    fireEvent.click(screen.getByText('Assign'));
+    fireEvent.click(screen.getByText('分配'));
     expect(handleAssign).toHaveBeenCalledWith(
       expect.objectContaining({
         source: 'lfo1',
@@ -288,7 +288,7 @@ describe('Rotary Knob & Modulation Card (F23)', () => {
       })
     );
 
-    const unassignBtn = screen.getByText('Unassign');
+    const unassignBtn = screen.getByText('取消分配');
     expect(unassignBtn).toBeDefined();
 
     fireEvent.click(unassignBtn);

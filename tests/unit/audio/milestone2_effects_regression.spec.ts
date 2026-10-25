@@ -103,11 +103,13 @@ describe('Milestone 2 (D14-D18) Effects Chain & Anti-Pop Restructuring Regressio
     it('D15-2: restore() smoothly ramps wetGain over 3ms micro-ramp', () => {
       const delay = new StereoDelay(ctx as unknown as BaseAudioContext);
       delay.setParams({ mix: 0.5 });
+      ctx.advanceTime(1); // Allow scheduled anti-click ramps to settle.
 
       delay.purge();
       expect(delay.wetGain.gain.value).toBe(0);
 
       delay.restore();
+      ctx.advanceTime(1); // Allow scheduled anti-click ramps to settle.
       // Input and feedback are immediately restored
       expect(delay.delayInGain.gain.value).toBe(1.0);
       expect(delay.feedbackGainL.gain.value).toBe(0.45);
@@ -143,6 +145,7 @@ describe('Milestone 2 (D14-D18) Effects Chain & Anti-Pop Restructuring Regressio
 
       // High resonance Q=18.0: comp = 1 / sqrt(1 + 0.25 * 18) = 1 / sqrt(5.5) ~= 0.4264
       filter.setParams({ resonance: 18.0 });
+      ctx.advanceTime(1); // Allow scheduled anti-click ramps to settle.
       expect(filterOutGain.gain.value).toBeCloseTo(1 / Math.sqrt(5.5), 3);
 
       // Output gain is attenuated by more than 50% to prevent cascaded +30dB resonance explosion
@@ -156,6 +159,7 @@ describe('Milestone 2 (D14-D18) Effects Chain & Anti-Pop Restructuring Regressio
 
       // Peak mode at max resonance 18
       filter.setParams({ type: 'peak', resonance: 18.0 });
+      ctx.advanceTime(1); // Allow scheduled anti-click ramps to settle.
 
       const stage1 = (filter as any).stage1 as BiquadFilterNode;
       const stage2 = (filter as any).stage2 as BiquadFilterNode;
@@ -231,6 +235,7 @@ describe('Milestone 2 (D14-D18) Effects Chain & Anti-Pop Restructuring Regressio
     it('D18-2: ConvolverReverb purge() immediately zeroes wetGain and restore() smoothly ramps', () => {
       const reverb = new ConvolverReverb(ctx as unknown as BaseAudioContext);
       reverb.setParams({ mix: 0.5 });
+      ctx.advanceTime(1); // Allow scheduled anti-click ramps to settle.
 
       expect(reverb.wetGain.gain.value).toBeGreaterThan(0);
 
@@ -241,6 +246,7 @@ describe('Milestone 2 (D14-D18) Effects Chain & Anti-Pop Restructuring Regressio
 
       // Restore
       reverb.restore();
+      ctx.advanceTime(1); // Allow scheduled anti-click ramps to settle.
       expect(reverb.reverbInGain.gain.value).toBe(1.0);
       expect(reverb.wetGain.gain.value).toBeCloseTo(Math.SQRT1_2, 4);
 

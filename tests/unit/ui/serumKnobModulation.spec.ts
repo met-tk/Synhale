@@ -72,18 +72,18 @@ describe('Serum-Style Knob Modulation Ring & 4-Stage Automation', () => {
     fireEvent.click(stageBtn);
 
     // Check medium interactive stage envelope viewport is displayed
-    expect(screen.getByText(/全呼吸阶段包络 · 连续全景视窗/)).toBeDefined();
+    expect(screen.getByText(/阶段包络全景/)).toBeDefined();
     expect(screen.getByText('吸气 Inhale')).toBeDefined();
     expect(screen.getByText('屏息 Hold In')).toBeDefined();
     expect(screen.getByText('呼气 Exhale')).toBeDefined();
     expect(screen.getByText('静息 Hold Out')).toBeDefined();
 
     // Check entry button to open studio MSEG
-    const openStudioBtn = screen.getByRole('button', { name: /打开独立包络工作台/i });
+    const openStudioBtn = screen.getByRole('button', { name: /打开工作台/i });
     expect(openStudioBtn).toBeDefined();
 
     // Click confirm / assign
-    const confirmBtn = screen.getByRole('button', { name: /Assign/i });
+    const confirmBtn = screen.getByRole('button', { name: /分配/i });
     fireEvent.click(confirmBtn);
 
     expect(handleAssign).toHaveBeenCalledTimes(1);
@@ -154,7 +154,7 @@ describe('Serum-Style Knob Modulation Ring & 4-Stage Automation', () => {
     fireEvent.click(screen.getByText('Stage Env'));
 
     // Click the medium interactive waveform container
-    const viewport = screen.getByTitle('点击全景波形视窗进入独立包络工作台');
+    const viewport = screen.getByTitle('点击打开包络工作台');
     expect(viewport).toBeDefined();
     fireEvent.click(viewport);
 
@@ -187,14 +187,14 @@ describe('Serum-Style Knob Modulation Ring & 4-Stage Automation', () => {
     expect(screen.getByText('-100%')).toBeDefined();
 
     // Assert target control preview exists
-    expect(screen.getByText('控制旋钮大样')).toBeDefined();
+    expect(screen.getByText('控制旋钮')).toBeDefined();
 
     // Adjust depth to 0.75 via input change
     fireEvent.change(depthInput, { target: { value: '0.75' } });
     expect(parseFloat(depthInput.value)).toBe(0.75);
 
     // Click assign
-    const confirmBtn = screen.getByRole('button', { name: /Assign/i });
+    const confirmBtn = screen.getByRole('button', { name: /分配/i });
     fireEvent.click(confirmBtn);
 
     expect(handleAssign).toHaveBeenCalledTimes(1);
@@ -216,8 +216,8 @@ describe('Serum-Style Knob Modulation Ring & 4-Stage Automation', () => {
     );
 
     // Assert two branches exist
-    expect(screen.getByText(/呼吸动态组 · Breath Dynamic Group/)).toBeDefined();
-    expect(screen.getByText(/合成器内部 LFO 组 · Internal Synth LFO/)).toBeDefined();
+    expect(screen.getByText(/呼吸动态/)).toBeDefined();
+    expect(screen.getByText(/内部 LFO/)).toBeDefined();
 
     // Default Breath Macro shows polarity mode
     expect(screen.getByText(/极性模式 · Polarity Mode/)).toBeDefined();
@@ -228,15 +228,15 @@ describe('Serum-Style Knob Modulation Ring & 4-Stage Automation', () => {
 
     // Polarity Mode section should remain accessible for LFO 1
     expect(screen.getByText(/极性模式 · Polarity Mode/)).toBeDefined();
-    const polarityToggleBtn = screen.getByRole('button', { name: /Bidirectional/i });
+    const polarityToggleBtn = screen.getByRole('button', { name: /双向/i });
     expect(polarityToggleBtn).toBeDefined();
 
     // Toggle to Unipolar
     fireEvent.click(polarityToggleBtn);
-    expect(screen.getByRole('button', { name: /Unipolar/i })).toBeDefined();
+    expect(screen.getByRole('button', { name: /单向/i })).toBeDefined();
 
     // Click assign to confirm unipolar route assignment
-    const confirmBtn = screen.getByRole('button', { name: /Assign/i });
+    const confirmBtn = screen.getByRole('button', { name: /分配/i });
     fireEvent.click(confirmBtn);
 
     expect(handleAssign).toHaveBeenCalledTimes(1);
@@ -266,7 +266,7 @@ describe('Serum-Style Knob Modulation Ring & 4-Stage Automation', () => {
     fireEvent.click(stageBtn);
 
     // Find and click Open Studio button
-    const openStudioBtn = screen.getByText(/打开独立包络工作台/);
+    const openStudioBtn = screen.getByText(/打开工作台/);
     expect(openStudioBtn).toBeDefined();
     fireEvent.click(openStudioBtn);
 

@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import { readAccent } from '../../theme/deckPalette';
 import {
   computeWavetableTimeDomain,
   WAVETABLE_DEFINITIONS,
@@ -42,6 +43,9 @@ export const WavetableVisualizer: React.FC<WavetableVisualizerProps> = ({
   defaultViewMode = '2d'
 }) => {
   const [viewMode, setViewMode] = useState<'2d' | '3d'>(defaultViewMode);
+
+  // Soft palette accent driving wave strokes and gradient fills
+  const wtAccent = readAccent(isDark ? '400' : '600', '#38bdf8');
 
   // Multi-frame mode is active when tableIndex is explicitly provided
   const isMultiFrameMode = tableIndex !== undefined && tableIndex >= 0 && tableIndex < MULTI_FRAME_WAVETABLES.length;
@@ -290,21 +294,21 @@ export const WavetableVisualizer: React.FC<WavetableVisualizerProps> = ({
       >
         <defs>
           <linearGradient id={`wv-grad-${safeIdx}`} x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stopColor="#38bdf8" />
+            <stop offset="0%" stopColor={wtAccent} />
             <stop offset="50%" stopColor="#34d399" />
             <stop offset="100%" stopColor="#818cf8" />
           </linearGradient>
           <linearGradient id={`wv-area-${safeIdx}`} x1="0%" y1="0%" x2="0%" y2="100%">
-            <stop offset="0%" stopColor="#38bdf8" stopOpacity={isDark ? "0.22" : "0.12"} />
-            <stop offset="100%" stopColor="#38bdf8" stopOpacity="0.0" />
+            <stop offset="0%" stopColor={wtAccent} stopOpacity={isDark ? "0.22" : "0.12"} />
+            <stop offset="100%" stopColor={wtAccent} stopOpacity="0.0" />
           </linearGradient>
           <linearGradient id={`wv-morph-grad-${safeIdx}`} x1="0%" y1="0%" x2="100%" y2="0%">
             <stop offset="0%" stopColor="#c084fc" stopOpacity="0.9" />
             <stop offset="100%" stopColor="#818cf8" stopOpacity="0.9" />
           </linearGradient>
           <linearGradient id="wv-3d-active-glow" x1="0%" y1="0%" x2="0%" y2="100%">
-            <stop offset="0%" stopColor="#38bdf8" stopOpacity={isDark ? "0.28" : "0.16"} />
-            <stop offset="100%" stopColor="#38bdf8" stopOpacity="0.0" />
+            <stop offset="0%" stopColor={wtAccent} stopOpacity={isDark ? "0.28" : "0.16"} />
+            <stop offset="100%" stopColor={wtAccent} stopOpacity="0.0" />
           </linearGradient>
         </defs>
 
@@ -392,7 +396,7 @@ export const WavetableVisualizer: React.FC<WavetableVisualizerProps> = ({
                     <path
                       d={s.lineD}
                       fill="none"
-                      stroke="#38bdf8"
+                      stroke={wtAccent}
                       strokeWidth={2.0}
                       strokeLinecap="round"
                       strokeLinejoin="round"
@@ -402,7 +406,7 @@ export const WavetableVisualizer: React.FC<WavetableVisualizerProps> = ({
                         cx={s.beacon.x}
                         cy={s.beacon.y}
                         r={1.8}
-                        fill="#38bdf8"
+                        fill={wtAccent}
                         stroke={isDark ? '#0f172a' : '#ffffff'}
                         strokeWidth={0.8}
                       />

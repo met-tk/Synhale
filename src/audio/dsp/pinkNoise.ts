@@ -149,6 +149,18 @@ export function generateNoiseBufferByType(
 const realNoiseCache = new Map<string, AudioBuffer>();
 const inFlightLoads = new Map<string, Promise<AudioBuffer | null>>();
 
+/**
+ * Releases all cached noise AudioBuffers and cancels pending decode requests.
+ * Called by AudioEngine.dispose() to prevent unbounded memory growth across
+ * engine recreations (each new AudioContext may key on a different sampleRate).
+ */
+export function clearNoiseCache(): void {
+  realNoiseCache.clear();
+  // Pending loads will resolve into a null result; we do not abort in-flight
+  // fetch/decode since the resulting buffer is simply not retained anymore.
+  inFlightLoads.clear();
+}
+
 export async function loadRealNoiseBuffer(
   ctx: BaseAudioContext,
   type: 'pink' | 'white' | 'brown' | 'violet'

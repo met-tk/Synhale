@@ -7,3 +7,5 @@ export * from './canvasRenderer';
 export * from './presets';
 export * from './gestureHandler';
 export * from './statusCapsule';
+export * from './organicMotion';
+export * from './indicatorConfig';

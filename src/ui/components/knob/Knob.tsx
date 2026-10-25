@@ -1,30 +1,12 @@
 import React, { useRef, useState, useCallback, useEffect } from 'react';
 import type { ModulationRoute, BreathStage } from '../../../types';
+import { polarToCartesian, describeArc } from './arcUtils';
+import { readAccent, readAccentRgb } from '../../theme/deckPalette';
 
 export function isLongPressKnob(dx: number, dy: number, holdDurationMs: number): boolean {
   const dist = Math.sqrt(dx * dx + dy * dy);
   if (dist > 5.0) return false;
   return holdDurationMs >= 320;
-}
-
-function polarToCartesian(cx: number, cy: number, r: number, angleDeg: number) {
-  const rad = ((angleDeg - 90) * Math.PI) / 180.0;
-  return {
-    x: cx + r * Math.cos(rad),
-    y: cy + r * Math.sin(rad)
-  };
-}
-
-function describeArc(cx: number, cy: number, r: number, startAngle: number, endAngle: number) {
-  if (Math.abs(endAngle - startAngle) < 0.5) {
-    return '';
-  }
-  const actualStart = Math.min(startAngle, endAngle);
-  const actualEnd = Math.max(startAngle, endAngle);
-  const start = polarToCartesian(cx, cy, r, actualEnd);
-  const end = polarToCartesian(cx, cy, r, actualStart);
-  const largeArcFlag = actualEnd - actualStart <= 180 ? '0' : '1';
-  return `M ${start.x} ${start.y} A ${r} ${r} 0 ${largeArcFlag} 0 ${end.x} ${end.y}`;
 }
 
 export interface KnobProps {
@@ -78,8 +60,9 @@ export const Knob: React.FC<KnobProps> = ({
 
   const effectiveDefault = defaultValue ?? (bipolar ? 0 : min);
 
-  // Clamp value to [min, max]
-  const clampedValue = Math.min(max, Math.max(min, value));
+  // Clamp value to [min, max] with safe finite check
+  const safeValue = typeof value === 'number' && Number.isFinite(value) ? value : (defaultValue ?? (bipolar ? 0 : min));
+  const clampedValue = Math.min(max, Math.max(min, safeValue));
   const range = max - min;
   const norm = range === 0 ? 0 : Math.max(0, Math.min(1, (clampedValue - min) / range));
 
@@ -96,8 +79,9 @@ export const Knob: React.FC<KnobProps> = ({
   }, []);
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (disabled) return;
+    if (disabled || e.button !== 0) return;
     e.preventDefault();
+    e.currentTarget.focus({ preventScroll: true });
     if (typeof e.currentTarget.setPointerCapture === 'function') {
       try {
         e.currentTarget.setPointerCapture(e.pointerId);
@@ -183,6 +167,11 @@ export const Knob: React.FC<KnobProps> = ({
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (disabled) return;
+    if (onLongPress && (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10'))) {
+      e.preventDefault();
+      onLongPress();
+      return;
+    }
     const multiplier = e.shiftKey ? 10 : 1;
     let nextVal = clampedValue;
 
@@ -206,10 +195,16 @@ export const Knob: React.FC<KnobProps> = ({
   };
 
   useEffect(() => {
+    if (disabled) {
+      clearLongPressTimer();
+      pointerStartRef.current = null;
+      isDraggingRef.current = false;
+      setIsActive(false);
+    }
     return () => {
       clearLongPressTimer();
     };
-  }, [clearLongPressTimer]);
+  }, [clearLongPressTimer, disabled]);
 
   // Formatted string
   const displayString = formatValue
@@ -318,6 +313,8 @@ export const Knob: React.FC<KnobProps> = ({
         ref={knobRef}
         id={id}
         role="slider"
+        aria-disabled={disabled}
+        aria-haspopup={onLongPress ? 'dialog' : undefined}
         tabIndex={disabled ? -1 : 0}
         aria-label={ariaLabel || label}
         aria-valuenow={clampedValue}
@@ -328,6 +325,7 @@ export const Knob: React.FC<KnobProps> = ({
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
+        onLostPointerCapture={handlePointerUp}
         onDoubleClick={handleDoubleClick}
         onKeyDown={handleKeyDown}
         className={`relative flex items-center justify-center cursor-ns-resize touch-none outline-none focus-visible:ring-1 focus-visible:ring-sky-500 rounded-full min-w-[44px] min-h-[44px] transition-transform ${
@@ -342,7 +340,7 @@ export const Knob: React.FC<KnobProps> = ({
             fill="none"
             stroke="currentColor"
             strokeWidth={2.5}
-            className="text-neutral-300 dark:text-neutral-800"
+            style={{ color: 'var(--knob-track)' }}
           />
 
           {/* 2. Base Knob Active Arc (Current Value) */}
@@ -353,7 +351,8 @@ export const Knob: React.FC<KnobProps> = ({
               stroke="currentColor"
               strokeWidth={2.5}
               strokeLinecap="round"
-              className={`text-slate-700 dark:text-slate-300 ${getBreathStageGlow()}`}
+              className={getBreathStageGlow()}
+              style={{ color: 'var(--knob-arc)' }}
             />
           )}
 
@@ -365,7 +364,7 @@ export const Knob: React.FC<KnobProps> = ({
               stroke="currentColor"
               strokeWidth={3}
               strokeLinecap="round"
-              className="text-neutral-300 dark:text-neutral-800"
+              style={{ color: 'var(--knob-track)' }}
             />
           )}
 
@@ -374,11 +373,11 @@ export const Knob: React.FC<KnobProps> = ({
             <path
               d={modArc}
               fill="none"
-              stroke="#0284c7"
+              stroke={readAccent('600', '#0284c7')}
               strokeWidth={3.5}
               strokeOpacity={0.65}
               strokeLinecap="round"
-              className="drop-shadow-[0_0_4px_rgba(2,132,199,0.5)]"
+              style={{ filter: `drop-shadow(0 0 4px rgba(${readAccentRgb('600', '#0284c7')}, 0.5))` }}
             />
           )}
 
@@ -387,7 +386,7 @@ export const Knob: React.FC<KnobProps> = ({
             cx={cx}
             cy={cy}
             r={radius - 6}
-            className="fill-white stroke-neutral-300 dark:fill-neutral-950 dark:stroke-neutral-800"
+            style={{ fill: 'var(--knob-face)', stroke: 'var(--knob-face-stroke)' }}
             strokeWidth={1}
           />
 
@@ -400,7 +399,7 @@ export const Knob: React.FC<KnobProps> = ({
             stroke="currentColor"
             strokeWidth={2}
             strokeLinecap="round"
-            className="text-neutral-900 dark:text-slate-100"
+            style={{ color: 'var(--knob-needle)' }}
           />
 
           {/* 7. TOP LAYER: Serum Dynamic Live Sweep Arc (high-voltage neon cyan beam) */}
@@ -421,7 +420,7 @@ export const Knob: React.FC<KnobProps> = ({
               cx={baseModAnchorPos.x}
               cy={baseModAnchorPos.y}
               r={2}
-              className="fill-sky-400 drop-shadow-[0_0_4px_#38bdf8]"
+              style={{ fill: 'var(--acc-400)', filter: 'drop-shadow(0 0 4px var(--acc-400))' }}
             />
           )}
 
@@ -442,7 +441,7 @@ export const Knob: React.FC<KnobProps> = ({
               cx={cx}
               cy={cy + radius - 2}
               r={1.5}
-              className="fill-sky-400 drop-shadow-[0_0_4px_#38bdf8]"
+              style={{ fill: 'var(--acc-400)', filter: 'drop-shadow(0 0 4px var(--acc-400))' }}
             />
           )}
         </svg>
@@ -451,7 +450,6 @@ export const Knob: React.FC<KnobProps> = ({
       {/* Label & Value Readout */}
       <div className="mt-1 flex flex-col items-center">
         <span
-          title={label}
           className="text-[9.5px] uppercase tracking-wider text-neutral-600 dark:text-slate-400 font-medium text-center min-w-[56px] max-w-[82px] leading-tight break-words line-clamp-2"
         >
           {label}

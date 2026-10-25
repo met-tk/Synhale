@@ -57,14 +57,16 @@ describe('Milestone 4 Regression Test Suite (D27 - D33)', () => {
   describe('D27: GrainSourceVisualizer Dropzone AudioContext Lifecycle', () => {
     it('closes temporary AudioContext in finally block on successful drop decode', async () => {
       const closeSpy = vi.fn().mockResolvedValue(undefined);
+      const onCustomSampleLoaded = vi.fn();
       const decodeAudioDataSpy = vi.fn().mockResolvedValue({
         duration: 2.5,
+        length: 110250,
         numberOfChannels: 2,
         sampleRate: 44100,
         getChannelData: () => new Float32Array(1024)
       });
 
-      const MockAudioContext = vi.fn().mockImplementation(() => ({
+      const MockAudioContext = vi.fn().mockImplementation(function () { return {
         decodeAudioData: decodeAudioDataSpy,
         createBuffer: vi.fn().mockReturnValue({
           duration: 2.5,
@@ -74,7 +76,7 @@ describe('Milestone 4 Regression Test Suite (D27 - D33)', () => {
           getChannelData: () => new Float32Array(1024)
         }),
         close: closeSpy
-      }));
+      }; });
 
       (window as any).AudioContext = MockAudioContext;
 
@@ -82,7 +84,7 @@ describe('Milestone 4 Regression Test Suite (D27 - D33)', () => {
         React.createElement(
           ThemeProvider,
           null,
-          React.createElement(GrainSourceVisualizer, { sampleId: 'test' })
+          React.createElement(GrainSourceVisualizer, { sampleId: 'test', onCustomSampleLoaded })
         )
       );
 
@@ -100,6 +102,7 @@ describe('Milestone 4 Regression Test Suite (D27 - D33)', () => {
 
       expect(MockAudioContext).toHaveBeenCalled();
       expect(decodeAudioDataSpy).toHaveBeenCalled();
+      expect(onCustomSampleLoaded).toHaveBeenCalledWith(expect.stringMatching(/^custom_/));
       expect(closeSpy).toHaveBeenCalledTimes(1);
     });
 
@@ -107,10 +110,10 @@ describe('Milestone 4 Regression Test Suite (D27 - D33)', () => {
       const closeSpy = vi.fn().mockResolvedValue(undefined);
       const decodeAudioDataSpy = vi.fn().mockRejectedValue(new Error('Corrupt audio data'));
 
-      const MockAudioContext = vi.fn().mockImplementation(() => ({
+      const MockAudioContext = vi.fn().mockImplementation(function () { return {
         decodeAudioData: decodeAudioDataSpy,
         close: closeSpy
-      }));
+      }; });
 
       (window as any).AudioContext = MockAudioContext;
 
@@ -124,6 +127,7 @@ describe('Milestone 4 Regression Test Suite (D27 - D33)', () => {
 
       const dropZone = container.firstChild as HTMLElement;
       const file = new File(['corrupt-bytes'], 'broken.wav', { type: 'audio/wav' });
+      Object.defineProperty(file, 'arrayBuffer', { value: async () => new ArrayBuffer(8) });
 
       await act(async () => {
         fireEvent.drop(dropZone, {

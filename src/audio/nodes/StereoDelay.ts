@@ -12,6 +12,7 @@
 
 import { EffectsChainParams, AudioEffectNode } from '../../types/audio';
 import { computeEqualPowerMix } from '../dsp/syntheticReverb';
+import { sanitizeParameterPatch } from '../dsp/parameterSafety';
 
 export class StereoDelay implements AudioEffectNode {
   public readonly id: string;
@@ -134,27 +135,26 @@ export class StereoDelay implements AudioEffectNode {
 
   setParams(params: Partial<EffectsChainParams['delay']>): void {
     if (this.isDisposed) return;
+    params = sanitizeParameterPatch(params);
     const now = this.ctx.currentTime;
 
     if (params.time !== undefined) {
       this.currentParams.time = Math.max(0.01, Math.min(3.0, params.time));
       this.delayL.delayTime.setTargetAtTime(this.currentParams.time, now, 0.06);
       this.delayR.delayTime.setTargetAtTime(Math.min(4.5, this.currentParams.time * 1.33), now, 0.06);
-      if ((this.ctx as any)?.advanceTime) {
-        (this.delayL.delayTime as any)._value = this.currentParams.time;
-        (this.delayR.delayTime as any)._value = Math.min(4.5, this.currentParams.time * 1.33);
-      }
     }
 
     if (params.feedback !== undefined) {
-      this.currentParams.feedback = Math.max(0, Math.min(0.95, params.feedback));
+      // Anti-howl feedback limiter: 0.95 sat dangerously close to the
+      // ping-pong self-oscillation threshold (damping filter provides only
+      // ~6 dB/oct above cutoff). 0.85 preserves generous tail length while
+      // leaving a stable margin under any damping setting. Matches the
+      // documented range in types/audio.ts (0..0.85) and the module header
+      // comment on line 7.
+      this.currentParams.feedback = Math.max(0, Math.min(0.85, params.feedback));
       if (!this.isPurged) {
         this.feedbackGainL.gain.setTargetAtTime(this.currentParams.feedback, now, 0.015);
         this.feedbackGainR.gain.setTargetAtTime(this.currentParams.feedback, now, 0.015);
-        if ((this.ctx as any)?.advanceTime) {
-          (this.feedbackGainL.gain as any)._value = this.currentParams.feedback;
-          (this.feedbackGainR.gain as any)._value = this.currentParams.feedback;
-        }
       }
     }
 
@@ -162,10 +162,6 @@ export class StereoDelay implements AudioEffectNode {
       this.currentParams.damping = Math.max(500, Math.min(12000, params.damping));
       this.dampingFilterL.frequency.setTargetAtTime(this.currentParams.damping, now, 0.02);
       this.dampingFilterR.frequency.setTargetAtTime(this.currentParams.damping, now, 0.02);
-      if ((this.ctx as any)?.advanceTime) {
-        (this.dampingFilterL.frequency as any)._value = this.currentParams.damping;
-        (this.dampingFilterR.frequency as any)._value = this.currentParams.damping;
-      }
     }
 
     if (params.mix !== undefined) {
@@ -174,12 +170,6 @@ export class StereoDelay implements AudioEffectNode {
       this.dryGain.gain.setTargetAtTime(dry, now, 0.01);
       if (!this.isPurged) {
         this.wetGain.gain.setTargetAtTime(wet, now, 0.01);
-      }
-      if ((this.ctx as any)?.advanceTime) {
-        (this.dryGain.gain as any)._value = dry;
-        if (!this.isPurged) {
-          (this.wetGain.gain as any)._value = wet;
-        }
       }
     }
 
@@ -252,9 +242,6 @@ export class StereoDelay implements AudioEffectNode {
     this.wetGain.gain.cancelScheduledValues(now);
     this.wetGain.gain.setValueAtTime(0, now);
     this.wetGain.gain.linearRampToValueAtTime(wet, now + 0.003);
-    if ((this.ctx as any)?.advanceTime) {
-      (this.wetGain.gain as any)._value = wet;
-    }
   }
 
   getParams(): Readonly<EffectsChainParams['delay']> {

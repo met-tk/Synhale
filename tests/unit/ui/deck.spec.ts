@@ -247,10 +247,10 @@ describe('Synthesizer Hardware Deck (F22 & F19)', () => {
       )
     );
 
-    const wavetableBtn = screen.getByRole('button', { name: /Select Wavetable/i });
+    const wavetableBtn = screen.getByRole('button', { name: /选择波表集/i });
     fireEvent.click(wavetableBtn);
 
-    expect(screen.getByRole('dialog', { name: 'Select Sound Therapy Wavetable' })).toBeDefined();
+    expect(screen.getByRole('dialog', { name: '选择波表' })).toBeDefined();
     expect(screen.getByText('00: Classic Shapes')).toBeDefined();
   });
 

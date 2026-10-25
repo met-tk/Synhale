@@ -14,6 +14,7 @@
 import React, { useRef, useState, useCallback, useMemo } from 'react';
 import type { EqParams, EqBandConfig } from '../../../types/audio';
 import { DEFAULT_EQ_PARAMS } from '../../../types/audio';
+import { readAccent } from '../../theme/deckPalette';
 
 export interface EqVisualizerProps {
   params?: EqParams;
@@ -21,6 +22,13 @@ export interface EqVisualizerProps {
   isDark?: boolean;
   height?: number;
   className?: string;
+  /**
+   * Sample rate (Hz) used by the analytical biquad transfer function. Should
+   * match the live AudioContext.sampleRate so the rendered curve reflects what
+   * the engine actually filters. Defaults to 44100 to preserve historical
+   * behavior when the host does not provide one.
+   */
+  sampleRate?: number;
 }
 
 type BandKey = 'low' | 'midLow' | 'midHigh' | 'high';
@@ -140,11 +148,15 @@ export const EqVisualizer: React.FC<EqVisualizerProps> = ({
   onChange,
   isDark = true,
   height = 120,
-  className = ''
+  className = '',
+  sampleRate = 44100
 }) => {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [activeDragBand, setActiveDragBand] = useState<BandKey | null>(null);
   const [hoveredBand, setHoveredBand] = useState<BandKey | null>(null);
+
+  // Soft palette accent driving the response curve, zero-dB grid and LOW band
+  const accCurve = readAccent(isDark ? '400' : '600', isDark ? '#38bdf8' : '#0284c7');
 
   const svgWidth = 400; // Virtual coordinate width
   const svgHeight = height;
@@ -182,10 +194,10 @@ export const EqVisualizer: React.FC<EqVisualizerProps> = ({
       };
     }
 
-    const lowCoeffs = computeFilterCoeffs('low', params.low);
-    const midLowCoeffs = computeFilterCoeffs('midLow', params.midLow);
-    const midHighCoeffs = computeFilterCoeffs('midHigh', params.midHigh);
-    const highCoeffs = computeFilterCoeffs('high', params.high);
+    const lowCoeffs = computeFilterCoeffs('low', params.low, sampleRate);
+    const midLowCoeffs = computeFilterCoeffs('midLow', params.midLow, sampleRate);
+    const midHighCoeffs = computeFilterCoeffs('midHigh', params.midHigh, sampleRate);
+    const highCoeffs = computeFilterCoeffs('high', params.high, sampleRate);
 
     const pointsCount = 120;
     const points: Array<[number, number]> = [];
@@ -195,10 +207,10 @@ export const EqVisualizer: React.FC<EqVisualizerProps> = ({
       const x = (i / pointsCount) * svgWidth;
       const f = xToFreq(x);
 
-      const dbLow = evaluateBiquadDb(lowCoeffs, f);
-      const dbMidLow = evaluateBiquadDb(midLowCoeffs, f);
-      const dbMidHigh = evaluateBiquadDb(midHighCoeffs, f);
-      const dbHigh = evaluateBiquadDb(highCoeffs, f);
+      const dbLow = evaluateBiquadDb(lowCoeffs, f, sampleRate);
+      const dbMidLow = evaluateBiquadDb(midLowCoeffs, f, sampleRate);
+      const dbMidHigh = evaluateBiquadDb(midHighCoeffs, f, sampleRate);
+      const dbHigh = evaluateBiquadDb(highCoeffs, f, sampleRate);
 
       const totalDb = Math.max(-24, Math.min(24, dbLow + dbMidLow + dbMidHigh + dbHigh));
       const y = dbToY(totalDb);
@@ -209,7 +221,7 @@ export const EqVisualizer: React.FC<EqVisualizerProps> = ({
     const fPath = `${cPath} L ${svgWidth} ${yZero} L 0 ${yZero} Z`;
 
     return { curvePath: cPath, fillPath: fPath };
-  }, [params, dbToY, svgWidth, xToFreq]);
+  }, [params, dbToY, svgWidth, xToFreq, sampleRate]);
 
   // Pointer drag handling for handles
   const handlePointerDown = (band: BandKey, e: React.PointerEvent) => {
@@ -306,7 +318,7 @@ export const EqVisualizer: React.FC<EqVisualizerProps> = ({
       >
         <defs>
           <linearGradient id="eqFillGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={isDark ? "#38bdf8" : "#0284c7"} stopOpacity={isDark ? "0.22" : "0.18"} />
+            <stop offset="0%" stopColor={accCurve} stopOpacity={isDark ? "0.22" : "0.18"} />
             <stop offset="50%" stopColor={isDark ? "#2dd4bf" : "#0d9488"} stopOpacity={isDark ? "0.10" : "0.08"} />
             <stop offset="100%" stopColor={isDark ? "#2dd4bf" : "#0d9488"} stopOpacity="0.0" />
           </linearGradient>
@@ -323,7 +335,7 @@ export const EqVisualizer: React.FC<EqVisualizerProps> = ({
                 y1={y}
                 x2={svgWidth}
                 y2={y}
-                stroke={isZero ? (isDark ? '#38bdf8' : '#0284c7') : (isDark ? '#262626' : '#cbd5e1')}
+                stroke={isZero ? accCurve : (isDark ? '#262626' : '#cbd5e1')}
                 strokeWidth={isZero ? 1.0 : 0.6}
                 strokeDasharray={isZero ? 'none' : '3 3'}
                 strokeOpacity={isZero ? (isDark ? 0.45 : 0.7) : (isDark ? 0.35 : 0.75)}
@@ -331,7 +343,7 @@ export const EqVisualizer: React.FC<EqVisualizerProps> = ({
               <text
                 x="6"
                 y={y - 2}
-                fill={isZero ? (isDark ? '#38bdf8' : '#0284c7') : (isDark ? '#64748b' : '#64748b')}
+                fill={isZero ? accCurve : (isDark ? '#64748b' : '#64748b')}
                 fontSize="7.5"
                 fontFamily="monospace"
                 fontWeight={isZero ? 'bold' : 'normal'}
@@ -380,11 +392,11 @@ export const EqVisualizer: React.FC<EqVisualizerProps> = ({
         <path
           d={curvePath}
           fill="none"
-          stroke={params.bypass ? '#94a3b8' : (isDark ? '#38bdf8' : '#0284c7')}
+          stroke={params.bypass ? '#94a3b8' : accCurve}
           strokeWidth={params.bypass ? 1.2 : 2.0}
           strokeLinecap="round"
           strokeLinejoin="round"
-          className={isDark ? "drop-shadow-[0_0_6px_rgba(56,189,248,0.35)]" : "drop-shadow-[0_1px_2px_rgba(2,132,199,0.25)]"}
+          style={!params.bypass ? { filter: `drop-shadow(0 0 6px ${accCurve}${isDark ? '59' : '33'})` } : undefined}
         />
 
         {/* 4 Interactive Band Handles */}
@@ -396,14 +408,15 @@ export const EqVisualizer: React.FC<EqVisualizerProps> = ({
             const y = isHp ? dbToY(0) : dbToY(cfg.gain);
             const isHovered = hoveredBand === band.key;
             const isDragging = activeDragBand === band.key;
+            const bandColor = band.key === 'low' ? accCurve : band.color;
             const bandTextColor = isDark
-              ? band.color
+              ? bandColor
               : band.key === 'midHigh'
                 ? '#0891b2'
                 : band.key === 'midLow'
                   ? '#0d9488'
                   : band.key === 'low'
-                    ? '#0284c7'
+                    ? accCurve
                     : '#4f46e5';
 
             return (
@@ -420,9 +433,9 @@ export const EqVisualizer: React.FC<EqVisualizerProps> = ({
                   cx={x}
                   cy={y}
                   r={isDragging ? 12 : isHovered ? 10 : 7}
-                  fill={band.color}
+                  fill={bandColor}
                   fillOpacity={isDragging ? 0.35 : isHovered ? 0.25 : 0.12}
-                  stroke={band.color}
+                  stroke={bandColor}
                   strokeWidth={1}
                   strokeOpacity={0.5}
                 />
@@ -462,13 +475,13 @@ export const EqVisualizer: React.FC<EqVisualizerProps> = ({
         const activeCfg = params[activeKey];
         const bandDef = BANDS.find(b => b.key === activeKey);
         const pillBandColor = isDark
-          ? bandDef?.color
+          ? (activeKey === 'low' ? accCurve : bandDef?.color)
           : activeKey === 'midHigh'
             ? '#0891b2'
             : activeKey === 'midLow'
               ? '#0d9488'
               : activeKey === 'low'
-                ? '#0284c7'
+                ? accCurve
                 : '#4f46e5';
         return (
           <div className={`absolute top-1 right-1.5 px-1.5 py-0.5 rounded text-[8.5px] font-mono flex items-center gap-2 pointer-events-none shadow-md ${

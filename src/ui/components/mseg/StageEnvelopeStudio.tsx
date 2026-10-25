@@ -13,6 +13,7 @@ import {
   ChevronDown
 } from 'lucide-react';
 import { ThemeContext } from '../../theme/ThemeProvider';
+import { useModalDialog } from '../../hooks/useModalDialog';
 import type {
   CurveControlPoint,
   SingleStageCurve,
@@ -91,6 +92,7 @@ export const StageEnvelopeStudio: React.FC<StageEnvelopeStudioProps> = ({
   onChange,
   onSave
 }) => {
+  const dialogRef = useModalDialog(isOpen, onClose);
   const [curveData, setCurveData] = useState<FullBreathCurveData>(() => {
     return propCurveData ?? initialCurveData ?? createDefaultBreathCurveData();
   });
@@ -121,8 +123,20 @@ export const StageEnvelopeStudio: React.FC<StageEnvelopeStudioProps> = ({
   const [renameValue, setRenameValue] = useState<string>('');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<boolean>(false);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [isDropdownOpen, setIsDropdownOpen] = useState<boolean>(false);
   const dropdownRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setActionNotice(null);
+      setSaveError(null);
+      return;
+    }
+    if (!actionNotice) return;
+    const timer = setTimeout(() => setActionNotice(null), 2500);
+    return () => clearTimeout(timer);
+  }, [actionNotice, isOpen]);
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -167,15 +181,19 @@ export const StageEnvelopeStudio: React.FC<StageEnvelopeStudioProps> = ({
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || e.isComposing) return;
+      if (e.target instanceof Element && (
+        e.target.closest('input, textarea, select, [contenteditable="true"]') ||
+        !dialogRef.current?.contains(e.target)
+      )) return;
       if ((e.key === 'Delete' || e.key === 'Backspace') && selectedPointId) {
+        e.preventDefault();
         handleDeleteSelectedPoint();
-      } else if (e.key === 'Escape') {
-        onClose();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, selectedPointId, activeStage, curveData]);
+  }, [isOpen, selectedPointId, activeStage, curveData, dialogRef]);
 
   // Current stage curve
   const currentStageCurve: SingleStageCurve = useMemo(() => {
@@ -419,7 +437,6 @@ export const StageEnvelopeStudio: React.FC<StageEnvelopeStudioProps> = ({
       setCurveData(cloned);
       onChange?.(cloned);
       setActionNotice(`已载入预设: ${p.name}`);
-      setTimeout(() => setActionNotice(null), 2500);
     } else {
       setSelectedPresetId(id);
     }
@@ -433,13 +450,19 @@ export const StageEnvelopeStudio: React.FC<StageEnvelopeStudioProps> = ({
   const handleSaveNewPreset = () => {
     const trimmed = newPresetName.trim();
     if (!trimmed) return;
-    const created = saveUserCurvePreset(trimmed, curveData);
+    let created: CurvePreset;
+    try {
+      created = saveUserCurvePreset(trimmed, curveData);
+      setSaveError(null);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : '保存失败，请重试。');
+      return;
+    }
     setPresets(getAllCurvePresets());
     setSelectedPresetId(created.id);
     setIsSavingNew(false);
     setNewPresetName('');
     setActionNotice(`新预设已保存: ${created.name}`);
-    setTimeout(() => setActionNotice(null), 2500);
   };
 
   const handleUpdateCurrentPreset = () => {
@@ -448,9 +471,11 @@ export const StageEnvelopeStudio: React.FC<StageEnvelopeStudioProps> = ({
     if (!p || p.category !== 'user') return;
     const ok = updateUserCurvePreset(p.id, curveData);
     if (ok) {
+      setSaveError(null);
       setPresets(getAllCurvePresets());
       setActionNotice(`已覆盖更新预设: ${p.name}`);
-      setTimeout(() => setActionNotice(null), 2500);
+    } else {
+      setSaveError('无法更新预设，请检查本地存储空间后重试。');
     }
   };
 
@@ -471,22 +496,27 @@ export const StageEnvelopeStudio: React.FC<StageEnvelopeStudioProps> = ({
     }
     const ok = renameUserCurvePreset(p.id, trimmed);
     if (ok) {
+      setSaveError(null);
       setPresets(getAllCurvePresets());
       setIsRenaming(false);
       setActionNotice(`已重命名为: ${trimmed}`);
-      setTimeout(() => setActionNotice(null), 2500);
+    } else {
+      setSaveError('无法重命名预设，请检查本地存储空间后重试。');
     }
   };
 
   const handleDeletePreset = () => {
     const p = presets.find(item => item.id === selectedPresetId);
     if (!p || p.category !== 'user') return;
-    deleteUserCurvePreset(p.id);
+    if (!deleteUserCurvePreset(p.id)) {
+      setSaveError('无法删除预设，请检查本地存储是否可用后重试。');
+      return;
+    }
+    setSaveError(null);
     setPresets(getAllCurvePresets());
     setSelectedPresetId('');
     setShowDeleteConfirm(false);
     setActionNotice('预设已删除');
-    setTimeout(() => setActionNotice(null), 2500);
   };
 
   // Reset stage points to straight baseline
@@ -521,8 +551,11 @@ export const StageEnvelopeStudio: React.FC<StageEnvelopeStudioProps> = ({
 
   return createPortal(
     <div
+      ref={dialogRef}
+      tabIndex={-1}
       className="fixed inset-0 z-[120] flex items-center justify-center p-3 bg-black/80 backdrop-blur-md select-none overflow-y-auto"
       role="dialog"
+      aria-modal="true"
       aria-label="Stage Envelope Studio Workspace"
     >
       <div className={`relative w-full max-w-4xl rounded-2xl border p-5 shadow-2xl flex flex-col gap-4 my-auto transition-colors ${
@@ -864,10 +897,11 @@ export const StageEnvelopeStudio: React.FC<StageEnvelopeStudioProps> = ({
 
             {/* Live Action Notice */}
             {actionNotice && (
-              <span className="text-[11px] font-mono text-emerald-400 bg-emerald-950/60 border border-emerald-800/60 px-2 py-0.5 rounded-md">
+              <span role="status" className="text-[11px] font-mono text-sky-400 bg-sky-950/60 border border-sky-800/60 px-2 py-0.5 rounded-md">
                 {actionNotice}
               </span>
             )}
+            {saveError && <span role="alert" className="text-xs text-rose-500">{saveError}</span>}
           </div>
 
           {/* Current Stage Tools */}

@@ -1,3 +1,5 @@
+import { isRecord, readStoredJson, writeStoredJson } from '../storage/safeStorage';
+
 /**
  * Synhale 2 - Breath Transition Cue Sound Configuration & Presets
  * 
@@ -33,7 +35,7 @@ export const CUE_PRESETS: Record<BreathCuePresetId, BreathCuePresetMeta> = {
     id: 'singingBowl',
     name: '颂钵微鸣',
     nameEn: 'Tibetan Singing Bowl',
-    description: '西藏颂钵敲击自然实录，悠扬纯净余音，静心入定',
+    description: '颂钵实录，余音静心',
     freqHint: '自然实录',
     tag: '颂钵实录',
     sampleUrl: './audio/cues/singingBowl.ogg'
@@ -42,7 +44,7 @@ export const CUE_PRESETS: Record<BreathCuePresetId, BreathCuePresetMeta> = {
     id: 'zenWaterDrop',
     name: '自然水滴',
     nameEn: 'Nature Water Droplet',
-    description: '天然大自然水滴滴落微澜实录，纯净剔透，宁神舒缓',
+    description: '水滴微澜，宁神剔透',
     freqHint: '天然水滴',
     tag: '自然水韵',
     sampleUrl: './audio/cues/zenWaterDrop.ogg'
@@ -51,7 +53,7 @@ export const CUE_PRESETS: Record<BreathCuePresetId, BreathCuePresetMeta> = {
     id: 'woodenTemple',
     name: '温润暖木',
     nameEn: 'Zen Temple Wood',
-    description: '禅刹温润暖木共鸣实录，内敛柔和，绝无刺耳喧闹',
+    description: '暖木共鸣，内敛柔和',
     freqHint: '温润暖木',
     tag: '禅意温木',
     sampleUrl: './audio/cues/woodenTemple.ogg'
@@ -60,7 +62,7 @@ export const CUE_PRESETS: Record<BreathCuePresetId, BreathCuePresetMeta> = {
     id: 'crystalHarmonics',
     name: '空谷风铃',
     nameEn: 'Valley Wind Chime',
-    description: '天然风铃微风拂动原声实录，高阶谐波舒缓自然，空灵轻盈',
+    description: '风铃谐波，空灵轻盈',
     freqHint: '空灵风铃',
     tag: '风铃原声',
     sampleUrl: './audio/cues/crystalHarmonics.ogg'
@@ -69,7 +71,7 @@ export const CUE_PRESETS: Record<BreathCuePresetId, BreathCuePresetMeta> = {
     id: 'deepSubPing',
     name: '暖腹深钵',
     nameEn: 'Deep Tibetan Bowl',
-    description: '大号低音西藏颂钵原声实录，153Hz 深腹浑厚共振，安定温暖',
+    description: '低钵深鸣，安定温厚',
     freqHint: '深沉低钵',
     tag: '低音藏钵',
     sampleUrl: './audio/cues/deepSubPing.ogg'
@@ -99,46 +101,31 @@ export const DEFAULT_CUE_SETTINGS: BreathCueSettings = {
 
 const STORAGE_KEY = 'synhale_cue_settings_v1';
 
-/**
- * Load cue settings from localStorage with fallback to default
- */
-export function loadCueSettings(): BreathCueSettings {
-  if (typeof window === 'undefined' || !window.localStorage) {
-    return { ...DEFAULT_CUE_SETTINGS };
-  }
-
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { ...DEFAULT_CUE_SETTINGS };
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object') return { ...DEFAULT_CUE_SETTINGS };
-
-    return {
-      enabled: typeof parsed.enabled === 'boolean' ? parsed.enabled : DEFAULT_CUE_SETTINGS.enabled,
-      volume: typeof parsed.volume === 'number' && !isNaN(parsed.volume)
-        ? Math.max(0, Math.min(1, parsed.volume))
-        : DEFAULT_CUE_SETTINGS.volume,
-      preset: parsed.preset in CUE_PRESETS ? parsed.preset : DEFAULT_CUE_SETTINGS.preset,
-      nodes: {
-        exhale_to_inhale: Boolean(parsed.nodes?.exhale_to_inhale ?? DEFAULT_CUE_SETTINGS.nodes.exhale_to_inhale),
-        inhale_to_holdIn: Boolean(parsed.nodes?.inhale_to_holdIn ?? DEFAULT_CUE_SETTINGS.nodes.inhale_to_holdIn),
-        holdIn_to_exhale: Boolean(parsed.nodes?.holdIn_to_exhale ?? DEFAULT_CUE_SETTINGS.nodes.holdIn_to_exhale),
-        exhale_to_holdOut: Boolean(parsed.nodes?.exhale_to_holdOut ?? DEFAULT_CUE_SETTINGS.nodes.exhale_to_holdOut)
-      }
-    };
-  } catch {
-    return { ...DEFAULT_CUE_SETTINGS };
-  }
+function repairCueSettings(raw: unknown): BreathCueSettings {
+  const parsed = isRecord(raw) ? raw : {};
+  const nodes = isRecord(parsed.nodes) ? parsed.nodes : {};
+  const enabledNode = (key: BreathTransitionNode) =>
+    typeof nodes[key] === 'boolean' ? nodes[key] : DEFAULT_CUE_SETTINGS.nodes[key];
+  return {
+    enabled: typeof parsed.enabled === 'boolean' ? parsed.enabled : DEFAULT_CUE_SETTINGS.enabled,
+    volume: typeof parsed.volume === 'number' && Number.isFinite(parsed.volume)
+      ? Math.max(0, Math.min(1, parsed.volume)) : DEFAULT_CUE_SETTINGS.volume,
+    preset: typeof parsed.preset === 'string' && Object.prototype.hasOwnProperty.call(CUE_PRESETS, parsed.preset)
+      ? parsed.preset as BreathCuePresetId : DEFAULT_CUE_SETTINGS.preset,
+    nodes: {
+      exhale_to_inhale: enabledNode('exhale_to_inhale'),
+      inhale_to_holdIn: enabledNode('inhale_to_holdIn'),
+      holdIn_to_exhale: enabledNode('holdIn_to_exhale'),
+      exhale_to_holdOut: enabledNode('exhale_to_holdOut')
+    }
+  };
 }
 
-/**
- * Save cue settings to localStorage
- */
+/** Load independently owned settings, including nested default node flags. */
+export function loadCueSettings(): BreathCueSettings {
+  return repairCueSettings(readStoredJson(STORAGE_KEY));
+}
+
 export function saveCueSettings(settings: BreathCueSettings): void {
-  if (typeof window === 'undefined' || !window.localStorage) return;
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
-  } catch (err) {
-    console.warn('[CueSettings] Failed to save to localStorage:', err);
-  }
+  writeStoredJson(STORAGE_KEY, repairCueSettings(settings));
 }

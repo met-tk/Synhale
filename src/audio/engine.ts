@@ -19,6 +19,7 @@ import {
   EffectsChainParams,
   LaneId,
   SoundSourceId,
+  SoundSourceType,
   SourceRouteMap,
   DEFAULT_SOURCE_ROUTES,
   DEFAULT_LANE_A_ORDER,
@@ -56,11 +57,16 @@ import {
 } from './nodes/AdsrModule';
 import { evaluateFullBreathCurve } from './dsp/curveMath';
 import { computeLfoLiveValue } from './dsp/lfoMath';
+import { sanitizeParameterPatch } from './dsp/parameterSafety';
 import { DEFAULT_GRANULAR_PARAMS, DEFAULT_OSC_A_PARAMS, AudioSourceNode, AudioEffectNode } from '../types/audio';
 import { EffectChainManager } from './nodes/EffectChainManager';
 import { LfoRackEffectModule } from './nodes/LfoRackEffectModule';
 
 import { SoundPreset, getSoundPresetById } from './presets/soundPresets';
+import { clearNoiseCache } from './dsp/pinkNoise';
+import { clearAmbientSoundscapeCache } from './nodes/AmbientSoundscapeLibrary';
+import { clearGranularSampleCache } from './nodes/GranularSampleLibrary';
+import { clearCueSampleCache } from './cue/breathCuePlayer';
 
 export const DEFAULT_CHANNEL_STRIP: ChannelStripParams = {
   oscA: {
@@ -144,6 +150,7 @@ export class AudioEngine implements AudioEngineApi {
   private isInitialized = false;
   private isDisposed = false;
   private isPaused = false;
+  private playbackRevision = 0;
 
   // Nodes
   public oscA!: OscAChannel;
@@ -152,7 +159,6 @@ export class AudioEngine implements AudioEngineApi {
   public drone!: DroneChannel;
   public ambient!: AmbientChannel;
   public sources: Map<string, AudioSourceNode> = new Map();
-  public preMixBus!: GainNode;
   public gainModule!: GainModule;
   public drive!: DriveModule;
   public filter!: MultimodeFilter;
@@ -229,6 +235,7 @@ export class AudioEngine implements AudioEngineApi {
     macroValue: number;
   } | null = null;
   private hardCutPurgeTimer: ReturnType<typeof setTimeout> | null = null;
+  private removeSourceTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
 
   constructor(customContext?: AudioContext) {
     if (customContext) {
@@ -239,11 +246,15 @@ export class AudioEngine implements AudioEngineApi {
   /**
    * Initializes the Web Audio graph and starts source nodes
    */
-  async init(): Promise<void> {
-    if (this.isInitialized) return;
+  async init(options: { muted?: boolean } = {}): Promise<void> {
+    if (this.isInitialized || this.isDisposed) return;
 
     if (!this.ctx) {
       const AudioCtxConstructor = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      if (!AudioCtxConstructor) {
+        console.warn('AudioEngine.init: Web Audio API is not supported in this environment');
+        return;
+      }
       this.ctx = new AudioCtxConstructor();
     }
 
@@ -275,10 +286,6 @@ export class AudioEngine implements AudioEngineApi {
     this.thruBus.gain.value = 1.0;
     this.busMixer.gain.value = 0.707; // -3dB equal-power summing protection
 
-    // Backward-compatibility preMixBus (preserved for legacy test assertion compatibility)
-    this.preMixBus = ctx.createGain();
-    this.preMixBus.gain.value = 0.75;
-
     // 2b. Configure pop-free routing crossfaders for all 5 sound sources
     const sourceList: Array<{ id: SoundSourceId; node: AudioSourceNode }> = [
       { id: 'oscA', node: this.oscA },
@@ -305,9 +312,6 @@ export class AudioEngine implements AudioEngineApi {
       toA.connect(this.laneBusA);
       toB.connect(this.laneBusB);
       toThru.connect(this.thruBus);
-
-      // Keep preMixBus connection for legacy unit tests checking connectedNodes
-      src.node.outputNode.connect(this.preMixBus);
 
       this.sourceRouteGains.set(src.id, { toA, toB, toThru });
     }
@@ -350,7 +354,8 @@ export class AudioEngine implements AudioEngineApi {
 
     // 4. Instantiate Master Bus Nodes with Safety Dynamics Limiter
     this.masterCutGain = ctx.createGain();
-    this.masterCutGain.gain.value = 1.0;
+    // Keep initial graph construction silent while the app applies its chosen preset.
+    this.masterCutGain.gain.value = options.muted ? 0.0 : 1.0;
 
     this.masterLimiter = ctx.createDynamicsCompressor();
     this.masterLimiter.threshold.value = -1.5;
@@ -436,22 +441,27 @@ export class AudioEngine implements AudioEngineApi {
     this.ambient.start(0);
     this.dualLfo.start(0);
 
-    // Prewarm all ambient soundscape buffers in memory
+    // Prewarm the primary ambient soundscapes; other samples load on demand.
     prewarmAllAmbientBuffers(ctx);
 
     this.isInitialized = true;
-    this.isPaused = false;
+    this.isPaused = options.muted === true;
   }
 
   /**
    * Resumes playback with smooth anti-pop ramp and restored delay/reverb loops
    */
   async resume(): Promise<void> {
-    if (!this.ctx || this.isDisposed) return;
+    if (!this.ctx || !this.isInitialized || this.isDisposed) return;
 
-    if (this.ctx.state === 'suspended') {
-      await this.ctx.resume();
+    const ctx = this.ctx;
+    const revision = ++this.playbackRevision;
+
+    if (ctx.state === 'suspended') {
+      await ctx.resume();
     }
+    // A later pause or disposal must win over an in-flight context resume.
+    if (this.isDisposed || revision !== this.playbackRevision) return;
 
     const now = this.ctx.currentTime;
     const wasPaused = this.isPaused;
@@ -474,6 +484,9 @@ export class AudioEngine implements AudioEngineApi {
     if (this.eq) {
       this.eq.restore();
     }
+    if (this.filter) {
+      this.filter.restore();
+    }
     if (this.dualLfo) {
       this.dualLfo.restore();
     }
@@ -482,6 +495,15 @@ export class AudioEngine implements AudioEngineApi {
     }
     if (this.ambient) {
       this.ambient.restore();
+    }
+    for (const src of this.sources.values()) {
+      try {
+        if (src.restore && src !== this.granular && src !== this.ambient) {
+          src.restore();
+        }
+      } catch (err) {
+        console.warn('AudioEngine.resume: source restore failed', err);
+      }
     }
     this.triggerAllAdsrRestore(wasPaused);
 
@@ -524,6 +546,7 @@ export class AudioEngine implements AudioEngineApi {
    */
   executeZeroResidueHardCut(): void {
     if (!this.ctx || !this.isInitialized || this.isDisposed) return;
+    this.playbackRevision++;
     this.isPaused = true;
     const now = this.ctx.currentTime;
     const CUT_DURATION = 0.0025; // 2.5 milliseconds
@@ -545,6 +568,9 @@ export class AudioEngine implements AudioEngineApi {
     if (this.eq) {
       this.eq.purge();
     }
+    if (this.filter) {
+      this.filter.purge();
+    }
     if (this.dualLfo) {
       this.dualLfo.purge();
     }
@@ -557,14 +583,12 @@ export class AudioEngine implements AudioEngineApi {
     this.hardCutPurgeTimer = setTimeout(() => {
       this.hardCutPurgeTimer = null;
       if (this.isDisposed || !this.isPaused) return;
-      if (this.oscA) {
-        this.oscA.purge();
-      }
-      if (this.granular) {
-        this.granular.purge();
-      }
-      if (this.ambient) {
-        this.ambient.purge();
+      for (const src of this.sources.values()) {
+        try {
+          if (src.purge) src.purge();
+        } catch (err) {
+          console.warn('AudioEngine: source purge failed during hard cut', err);
+        }
       }
     }, 3);
 
@@ -583,6 +607,7 @@ export class AudioEngine implements AudioEngineApi {
   updateBreathModulation(macroValue: number, stage: BreathStage, stageProgress: number): void {
     if (!this.isInitialized || this.isDisposed || this.isPaused) return;
 
+    if (!Number.isFinite(macroValue) || !Number.isFinite(stageProgress)) return;
     const clampedMacro = Math.max(0, Math.min(1, macroValue));
     this.currentBreathMacro = clampedMacro;
     this.currentBreathStage = stage;
@@ -729,17 +754,51 @@ export class AudioEngine implements AudioEngineApi {
       const effectiveMasterGain = Math.max(0, Math.min(1, this.effectsState.masterGain * factor));
       if (this.masterVolumeGain) {
         this.masterVolumeGain.gain.setTargetAtTime(effectiveMasterGain, now, 0.008);
-        if ((this.ctx as any)?.advanceTime) {
-          (this.masterVolumeGain.gain as any)._value = effectiveMasterGain;
-        }
       }
     } else {
       if (this.masterVolumeGain) {
         this.masterVolumeGain.gain.setTargetAtTime(this.effectsState.masterGain, now, 0.008);
-        if ((this.ctx as any)?.advanceTime) {
-          (this.masterVolumeGain.gain as any)._value = this.effectsState.masterGain;
-        }
       }
+    }
+
+    // 1b. BUS A & BUS B Master Fader Modulation
+    const cosA = Math.cos(this.currentBusMix * Math.PI * 0.5);
+    const sinB = Math.sin(this.currentBusMix * Math.PI * 0.5);
+    const baseLevelA = this.effectsState.busLevelA ?? 1.0;
+    const baseLevelB = this.effectsState.busLevelB ?? 1.0;
+
+    const busARoute = this.modulationRoutes['bus-master-a'];
+    let effectiveLevelA = baseLevelA;
+    if (busARoute && busARoute.source !== 'manual') {
+      const liveVal = this.computeRouteLiveValue(busARoute, stage, stageProgress, breathMacro);
+      let factor = 1.0;
+      if (busARoute.bipolar) {
+        factor = Math.max(0, Math.min(1, 1 + liveVal * busARoute.depth));
+      } else {
+        factor = (1 - busARoute.depth) + busARoute.depth * liveVal;
+        if (liveVal <= 0.001 && busARoute.depth >= 0.95) factor = 0.0;
+      }
+      effectiveLevelA = Math.max(0, Math.min(1, baseLevelA * factor));
+    }
+    if (this.busGainA) {
+      this.busGainA.gain.setTargetAtTime(cosA * effectiveLevelA, now, 0.008);
+    }
+
+    const busBRoute = this.modulationRoutes['bus-master-b'];
+    let effectiveLevelB = baseLevelB;
+    if (busBRoute && busBRoute.source !== 'manual') {
+      const liveVal = this.computeRouteLiveValue(busBRoute, stage, stageProgress, breathMacro);
+      let factor = 1.0;
+      if (busBRoute.bipolar) {
+        factor = Math.max(0, Math.min(1, 1 + liveVal * busBRoute.depth));
+      } else {
+        factor = (1 - busBRoute.depth) + busBRoute.depth * liveVal;
+        if (liveVal <= 0.001 && busBRoute.depth >= 0.95) factor = 0.0;
+      }
+      effectiveLevelB = Math.max(0, Math.min(1, baseLevelB * factor));
+    }
+    if (this.busGainB) {
+      this.busGainB.gain.setTargetAtTime(sinB * effectiveLevelB, now, 0.008);
     }
 
     // 2 & 3. Filter Cutoff and Resonance Modulation across all active Filter instances (Single & Multi-Instance)
@@ -872,14 +931,8 @@ export class AudioEngine implements AudioEngineApi {
       const liveVal = this.computeRouteLiveValue(panRoute, stage, stageProgress, breathMacro);
       const modPan = Math.max(-1.0, Math.min(1.0, basePan + liveVal * panRoute.depth));
       this.panner.pan.setTargetAtTime(modPan, now, 0.008);
-      if ((this.ctx as any)?.advanceTime) {
-        (this.panner.pan as any)._value = modPan;
-      }
     } else if (this.panner) {
       this.panner.pan.setTargetAtTime(basePan, now, 0.008);
-      if ((this.ctx as any)?.advanceTime) {
-        (this.panner.pan as any)._value = basePan;
-      }
     }
 
     // 11. OSC A Detune Modulation
@@ -1072,6 +1125,7 @@ export class AudioEngine implements AudioEngineApi {
    */
   updateChannelStrip(params: DeepPartial<ChannelStripParams>): void {
     if (this.isDisposed) return;
+    params = sanitizeParameterPatch(params);
 
     if (params.oscA) {
       if (params.oscA.wavetableIndex !== undefined) {
@@ -1098,12 +1152,10 @@ export class AudioEngine implements AudioEngineApi {
       if (params.oscA.semi !== undefined) params.oscA.semi = Math.max(-12, Math.min(12, Math.round(params.oscA.semi)));
       if (params.oscA.fine !== undefined) params.oscA.fine = Math.max(-100, Math.min(100, Math.round(params.oscA.fine)));
       if (params.oscA.warp !== undefined) params.oscA.warp = Math.max(0, Math.min(1, params.oscA.warp));
-      if (params.oscA.warpMode !== undefined) params.oscA.warpMode = params.oscA.warpMode;
       if (params.oscA.phase !== undefined) params.oscA.phase = Math.max(0, Math.min(360, params.oscA.phase));
       if (params.oscA.phaseRand !== undefined) params.oscA.phaseRand = Math.max(0, Math.min(1, params.oscA.phaseRand));
       if (params.oscA.pan !== undefined) params.oscA.pan = Math.max(-1, Math.min(1, params.oscA.pan));
       if (params.oscA.chordMode !== undefined) params.oscA.chordMode = Boolean(params.oscA.chordMode);
-      if (params.oscA.chordType !== undefined) params.oscA.chordType = params.oscA.chordType;
       if (params.oscA.subGain !== undefined) params.oscA.subGain = Math.max(0, Math.min(1, params.oscA.subGain));
       if (params.oscA.warmth !== undefined) params.oscA.warmth = Math.max(0, Math.min(1, params.oscA.warmth));
       if (params.oscA.spread !== undefined) params.oscA.spread = Math.max(0, Math.min(1, params.oscA.spread));
@@ -1171,6 +1223,24 @@ export class AudioEngine implements AudioEngineApi {
       Object.assign(this.channelStripState.ambient, params.ambient);
       if (this.ambient) this.ambient.setParams(this.channelStripState.ambient);
     }
+
+    if (params.instances) {
+      if (!this.channelStripState.instances) {
+        this.channelStripState.instances = {};
+      }
+      for (const [id, instParams] of Object.entries(params.instances)) {
+        if (instParams) {
+          this.channelStripState.instances[id] = {
+            ...(this.channelStripState.instances[id] || {}),
+            ...instParams
+          };
+          const src = this.sources.get(id);
+          if (src) {
+            src.setParams(instParams);
+          }
+        }
+      }
+    }
   }
 
   /**
@@ -1178,6 +1248,7 @@ export class AudioEngine implements AudioEngineApi {
    */
   updateEffects(params: DeepPartial<EffectsChainParams>): void {
     if (this.isDisposed) return;
+    params = sanitizeParameterPatch(params);
 
     if (params.gain) {
       if (!this.effectsState.gain) {
@@ -1311,9 +1382,6 @@ export class AudioEngine implements AudioEngineApi {
       if (this.busGainA && this.ctx) {
         const now = this.ctx.currentTime;
         this.busGainA.gain.setTargetAtTime(targetA, now, 0.015);
-        if ((this.ctx as any)?.advanceTime) {
-          (this.busGainA.gain as any)._value = targetA;
-        }
       }
     }
 
@@ -1325,9 +1393,6 @@ export class AudioEngine implements AudioEngineApi {
       if (this.busGainB && this.ctx) {
         const now = this.ctx.currentTime;
         this.busGainB.gain.setTargetAtTime(targetB, now, 0.015);
-        if ((this.ctx as any)?.advanceTime) {
-          (this.busGainB.gain as any)._value = targetB;
-        }
       }
     }
 
@@ -1364,6 +1429,7 @@ export class AudioEngine implements AudioEngineApi {
    * Sets equal-power crossfade between Lane A and Lane B (0.0 = 100% Lane A, 0.5 = Balanced, 1.0 = 100% Lane B)
    */
   public setBusMix(mix: number): void {
+    if (this.isDisposed || !Number.isFinite(mix)) return;
     const clamped = Math.max(0, Math.min(1, mix));
     this.currentBusMix = clamped;
     this.effectsState.busMix = clamped;
@@ -1377,10 +1443,6 @@ export class AudioEngine implements AudioEngineApi {
       const now = this.ctx.currentTime;
       this.busGainA.gain.setTargetAtTime(targetA, now, 0.015);
       this.busGainB.gain.setTargetAtTime(targetB, now, 0.015);
-      if ((this.ctx as any)?.advanceTime) {
-        (this.busGainA.gain as any)._value = targetA;
-        (this.busGainB.gain as any)._value = targetB;
-      }
     }
   }
 
@@ -1477,7 +1539,8 @@ export class AudioEngine implements AudioEngineApi {
         granular: this.granular ? this.granular.getParams() : this.channelStripState.granular,
         oscB: this.oscB.getParams(),
         drone: this.drone.getParams(),
-        ambient: this.ambient ? this.ambient.getParams() : this.channelStripState.ambient
+        ambient: this.ambient ? this.ambient.getParams() : this.channelStripState.ambient,
+        instances: JSON.parse(JSON.stringify(this.channelStripState.instances || {}))
       };
     }
     return JSON.parse(JSON.stringify(this.channelStripState));
@@ -1576,12 +1639,6 @@ export class AudioEngine implements AudioEngineApi {
     gains.toA.gain.linearRampToValueAtTime(lane === 'laneA' ? 1.0 : 0.0, now + FADE);
     gains.toB.gain.linearRampToValueAtTime(lane === 'laneB' ? 1.0 : 0.0, now + FADE);
     gains.toThru.gain.linearRampToValueAtTime(lane === 'thru' ? 1.0 : 0.0, now + FADE);
-
-    if ((this.ctx as any)?.advanceTime) {
-      (gains.toA.gain as any)._value = lane === 'laneA' ? 1.0 : 0.0;
-      (gains.toB.gain as any)._value = lane === 'laneB' ? 1.0 : 0.0;
-      (gains.toThru.gain as any)._value = lane === 'thru' ? 1.0 : 0.0;
-    }
   }
 
   /**
@@ -1595,6 +1652,7 @@ export class AudioEngine implements AudioEngineApi {
    * Reorders effects in a specific lane with 3ms micro-ducking
    */
   reorderLaneEffects(lane: 'laneA' | 'laneB', order: string[]): void {
+    order = [...new Set(order)];
     const currentOrder = lane === 'laneA' ? this.laneAOrder : this.laneBOrder;
     if (
       Array.isArray(order) &&
@@ -1834,64 +1892,193 @@ export class AudioEngine implements AudioEngineApi {
     }
   }
 
+  /**
+   * Dynamically adds and initializes a new sound source instance connected to multi-lane bus
+   */
+  public addSoundSource(
+    sourceId: string,
+    type: SoundSourceType,
+    initialParams?: any,
+    targetLane: LaneId = 'laneA'
+  ): AudioSourceNode | null {
+    if (this.sources.has(sourceId) || !this.ctx || !this.isInitialized || this.isDisposed) {
+      return this.sources.get(sourceId) || null;
+    }
+    const ctx = this.ctx;
+    let node: AudioSourceNode;
+    switch (type) {
+      case 'oscA':
+        node = new OscAChannel(ctx);
+        break;
+      case 'granular':
+        node = new GranularChannel(ctx);
+        break;
+      case 'oscB':
+        node = new OscBChannel(ctx);
+        break;
+      case 'drone':
+        node = new DroneChannel(ctx);
+        break;
+      case 'ambient':
+        node = new AmbientChannel(ctx);
+        break;
+      default:
+        node = new OscAChannel(ctx);
+    }
+
+    if (initialParams) {
+      node.setParams(initialParams);
+      if (!this.channelStripState.instances) {
+        this.channelStripState.instances = {};
+      }
+      try {
+        this.channelStripState.instances[sourceId] = structuredClone(initialParams);
+      } catch {
+        this.channelStripState.instances[sourceId] = JSON.parse(JSON.stringify(initialParams));
+      }
+    }
+
+    this.sources.set(sourceId, node);
+
+    // Configure pop-free routing crossfaders for this source
+    const toA = ctx.createGain();
+    const toB = ctx.createGain();
+    const toThru = ctx.createGain();
+
+    this.sourceRoutes[sourceId as SoundSourceId] = targetLane;
+    toA.gain.value = targetLane === 'laneA' ? 1.0 : 0.0;
+    toB.gain.value = targetLane === 'laneB' ? 1.0 : 0.0;
+    toThru.gain.value = targetLane === 'thru' ? 1.0 : 0.0;
+
+    node.outputNode.connect(toA);
+    node.outputNode.connect(toB);
+    node.outputNode.connect(toThru);
+
+    toA.connect(this.laneBusA);
+    toB.connect(this.laneBusB);
+    toThru.connect(this.thruBus);
+
+    this.sourceRouteGains.set(sourceId as SoundSourceId, { toA, toB, toThru });
+
+    // Start source node
+    node.start(0);
+
+    // If engine is currently paused or muted, keep it purged or muted until resume
+    if (this.isPaused && node.purge) {
+      node.purge();
+    }
+
+    return node;
+  }
+
+  /**
+   * Smoothly removes a sound source from the audio graph with 3ms anti-click micro-ramp
+   */
+  public removeSoundSource(sourceId: string): void {
+    const node = this.sources.get(sourceId);
+    const gains = this.sourceRouteGains.get(sourceId as SoundSourceId);
+
+    // Clear any previously pending removal timer to avoid leaking stale callbacks
+    // when removeSoundSource is invoked multiple times for the same source.
+    const previousTimer = this.removeSourceTimers.get(sourceId);
+    if (previousTimer !== undefined) {
+      clearTimeout(previousTimer);
+      this.removeSourceTimers.delete(sourceId);
+    }
+
+    const cleanup = (): void => {
+      if (gains) {
+        try { gains.toA.disconnect(); } catch (err) { console.warn('removeSoundSource: toA.disconnect failed', err); }
+        try { gains.toB.disconnect(); } catch (err) { console.warn('removeSoundSource: toB.disconnect failed', err); }
+        try { gains.toThru.disconnect(); } catch (err) { console.warn('removeSoundSource: toThru.disconnect failed', err); }
+      }
+      try { node?.stop(); } catch (err) { console.warn('removeSoundSource: node.stop failed', err); }
+      try { node?.dispose(); } catch (err) { console.warn('removeSoundSource: node.dispose failed', err); }
+      this.removeSourceTimers.delete(sourceId);
+    };
+
+    if (this.ctx && gains) {
+      const now = this.ctx.currentTime;
+      gains.toA.gain.cancelScheduledValues(now);
+      gains.toB.gain.cancelScheduledValues(now);
+      gains.toThru.gain.cancelScheduledValues(now);
+      gains.toA.gain.setValueAtTime(gains.toA.gain.value, now);
+      gains.toB.gain.setValueAtTime(gains.toB.gain.value, now);
+      gains.toThru.gain.setValueAtTime(gains.toThru.gain.value, now);
+      gains.toA.gain.linearRampToValueAtTime(0.0, now + 0.003);
+      gains.toB.gain.linearRampToValueAtTime(0.0, now + 0.003);
+      gains.toThru.gain.linearRampToValueAtTime(0.0, now + 0.003);
+
+      const timer = setTimeout(cleanup, 5);
+      this.removeSourceTimers.set(sourceId, timer);
+    } else {
+      cleanup();
+    }
+
+    if (this.channelStripState.instances) {
+      delete this.channelStripState.instances[sourceId];
+    }
+    this.sources.delete(sourceId);
+    this.sourceRouteGains.delete(sourceId as SoundSourceId);
+    delete this.sourceRoutes[sourceId as SoundSourceId];
+  }
+
   dispose(): void {
     if (this.isDisposed) return;
     this.isDisposed = true;
+    this.isInitialized = false;
+    this.playbackRevision++;
 
     if (this.hardCutPurgeTimer !== null) {
       clearTimeout(this.hardCutPurgeTimer);
       this.hardCutPurgeTimer = null;
     }
 
+    // Cancel any pending removeSoundSource callbacks so destroyed nodes are not
+    // touched after dispose() has already released the graph.
+    for (const timer of this.removeSourceTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.removeSourceTimers.clear();
+
+    // A failed node cleanup must not leave the remaining sources or context running.
+    const modules = new Set([
+      this.dualLfo, this.adsr, ...this.sources.values(),
+      this.gainModule, this.drive, this.filter,
+      this.eq, this.delay, this.reverb, this.lfoRackModule,
+      ...this.effectModules.values(), this.effectChainA, this.effectChainB
+    ]);
+    for (const module of modules) {
+      try { module?.dispose(); } catch (err) { /* Continue releasing the rest of the graph. */ console.warn('AudioEngine.dispose: module dispose failed', err); }
+    }
+    this.sources.clear();
+    this.effectModules.clear();
+    this.effectModuleParams.clear();
+
+    const routingNodes = [...this.sourceRouteGains.values()].flatMap(gains => [
+      gains.toA, gains.toB, gains.toThru
+    ]);
+    const nodes = [
+      ...routingNodes, this.panner, this.laneBusA, this.laneBusB,
+      this.busGainA, this.busGainB, this.thruBus, this.busMixer,
+      this.masterCutGain, this.masterLimiter, this.masterVolumeGain
+    ];
+    for (const node of nodes) {
+      try { node?.disconnect(); } catch (err) { /* Continue releasing the rest of the graph. */ console.warn('AudioEngine.dispose: node disconnect failed', err); }
+    }
+    this.sourceRouteGains.clear();
+
     try {
-      if (this.dualLfo) this.dualLfo.dispose();
-      if (this.adsr) this.adsr.dispose();
-      if (this.oscA) this.oscA.dispose();
-      if (this.granular) this.granular.dispose();
-      if (this.oscB) this.oscB.dispose();
-      if (this.drone) this.drone.dispose();
-      if (this.ambient) this.ambient.dispose();
-      if (this.gainModule) this.gainModule.dispose();
-      if (this.drive) this.drive.dispose();
-      if (this.filter) this.filter.dispose();
-      if (this.eq) this.eq.dispose();
-      if (this.delay) this.delay.dispose();
-      if (this.reverb) this.reverb.dispose();
-      if (this.effectChainA) this.effectChainA.dispose();
-      if (this.effectChainB) this.effectChainB.dispose();
-      for (const mod of this.effectModules.values()) {
-        try { mod.dispose(); } catch {}
-      }
-      this.effectModules.clear();
-      if (this.lfoRackModule) this.lfoRackModule.dispose();
-      if (this.panner) this.panner.disconnect();
-
-      for (const gains of this.sourceRouteGains.values()) {
-        try {
-          gains.toA.disconnect();
-          gains.toB.disconnect();
-          gains.toThru.disconnect();
-        } catch {}
-      }
-      this.sourceRouteGains.clear();
-
-      if (this.laneBusA) this.laneBusA.disconnect();
-      if (this.laneBusB) this.laneBusB.disconnect();
-      if (this.busGainA) this.busGainA.disconnect();
-      if (this.busGainB) this.busGainB.disconnect();
-      if (this.thruBus) this.thruBus.disconnect();
-      if (this.busMixer) this.busMixer.disconnect();
-
-      if (this.preMixBus) this.preMixBus.disconnect();
-      if (this.masterCutGain) this.masterCutGain.disconnect();
-      if (this.masterLimiter) this.masterLimiter.disconnect();
-      if (this.masterVolumeGain) this.masterVolumeGain.disconnect();
-
       if (this.ctx && this.ctx.state !== 'closed') {
         this.ctx.close().catch(() => {});
       }
-    } catch {
-      // Ignore cleanup errors on disposal
-    }
+    } catch (err) { /* The context may already be closing. */ console.warn('AudioEngine.dispose: ctx.close failed', err); }
+
+    // Release module-level AudioBuffer caches so engine recreation does not
+    // leak decoded sample memory across AudioContext lifetime boundaries.
+    try { clearNoiseCache(); } catch (err) { console.warn('AudioEngine.dispose: clearNoiseCache failed', err); }
+    try { clearAmbientSoundscapeCache(); } catch (err) { console.warn('AudioEngine.dispose: clearAmbientSoundscapeCache failed', err); }
+    try { clearGranularSampleCache(); } catch (err) { console.warn('AudioEngine.dispose: clearGranularSampleCache failed', err); }
+    try { clearCueSampleCache(); } catch (err) { console.warn('AudioEngine.dispose: clearCueSampleCache failed', err); }
   }
 }

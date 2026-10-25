@@ -3,6 +3,8 @@ dist/
 coverage/
 *.tsbuildinfo
 .agents/
+.zcode/
+.mimosa/
 scratch/
 release/
 .DS_Store

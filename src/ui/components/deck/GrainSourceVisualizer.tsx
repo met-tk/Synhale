@@ -1,6 +1,7 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { useTheme } from '../../theme';
-import { getCachedSamplePeaks, registerCustomAudioSample, getSampleDuration } from '../../../audio/nodes/GranularSampleLibrary';
+import { readAccent, readAccentRgb } from '../../theme/deckPalette';
+import { getCachedSamplePeaks, registerCustomAudioSample, getSampleDuration, MAX_IMPORTED_AUDIO_BYTES } from '../../../audio/nodes/GranularSampleLibrary';
 import type { ParticleVisualGrain } from '../../../audio/nodes/GranularChannel';
 
 interface GrainSourceVisualizerProps {
@@ -46,9 +47,24 @@ export const GrainSourceVisualizer: React.FC<GrainSourceVisualizerProps> = ({
 
   const [activeDragTarget, setActiveDragTarget] = useState<'playhead' | 'rangeStart' | 'rangeEnd' | null>(null);
   const [isDragOverFile, setIsDragOverFile] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+  const importingRef = useRef(false);
+  const mountedRef = useRef(true);
+  const importContextRef = useRef<AudioContext | null>(null);
   const hoverPositionRef = useRef<number | null>(null);
   const renderRef = useRef<() => void>(() => {});
   const sizeRef = useRef<{ w: number; h: number; dpr: number }>({ w: 0, h: 0, dpr: 1 });
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      const ctx = importContextRef.current;
+      importContextRef.current = null;
+      if (ctx) void ctx.close().catch(() => {});
+    };
+  }, []);
 
   // Resize canvas to match container's actual pixel width
   useEffect(() => {
@@ -127,12 +143,12 @@ export const GrainSourceVisualizer: React.FC<GrainSourceVisualizerProps> = ({
 
         if (typeof ctx.createLinearGradient === 'function') {
           const scanGrad = ctx.createLinearGradient(startX, 0, startX + scanWidth, 0);
-          scanGrad.addColorStop(0, 'rgba(56, 189, 248, 0.02)');
-          scanGrad.addColorStop(0.5, 'rgba(56, 189, 248, 0.20)');
-          scanGrad.addColorStop(1, 'rgba(56, 189, 248, 0.02)');
+          scanGrad.addColorStop(0, `rgba(${readAccentRgb('400', readAccent('400', '#38bdf8'))}, 0.02)`);
+          scanGrad.addColorStop(0.5, `rgba(${readAccentRgb('400', readAccent('400', '#38bdf8'))}, 0.20)`);
+          scanGrad.addColorStop(1, `rgba(${readAccentRgb('400', readAccent('400', '#38bdf8'))}, 0.02)`);
           ctx.fillStyle = scanGrad;
         } else {
-          ctx.fillStyle = 'rgba(56, 189, 248, 0.08)';
+          ctx.fillStyle = `rgba(${readAccentRgb('400', readAccent('400', '#38bdf8'))}, 0.08)`;
         }
         ctx.fillRect(startX, 1, scanWidth, h - 2);
       }
@@ -210,21 +226,21 @@ export const GrainSourceVisualizer: React.FC<GrainSourceVisualizerProps> = ({
         if (typeof ctx.createLinearGradient === 'function') {
           const activeWaveGrad = ctx.createLinearGradient(0, 0, 0, h);
           if (isDark) {
-            activeWaveGrad.addColorStop(0, 'rgba(56, 189, 248, 0.75)');
+            activeWaveGrad.addColorStop(0, `rgba(${readAccentRgb('400', readAccent('400', '#38bdf8'))}, 0.75)`);
             activeWaveGrad.addColorStop(0.5, 'rgba(14, 165, 233, 0.28)');
-            activeWaveGrad.addColorStop(1, 'rgba(56, 189, 248, 0.75)');
+            activeWaveGrad.addColorStop(1, `rgba(${readAccentRgb('400', readAccent('400', '#38bdf8'))}, 0.75)`);
           } else {
-            activeWaveGrad.addColorStop(0, 'rgba(2, 132, 199, 0.65)');
+            activeWaveGrad.addColorStop(0, `rgba(${readAccentRgb('600', '#0284c7')}, 0.65)`);
             activeWaveGrad.addColorStop(0.5, 'rgba(3, 105, 161, 0.22)');
-            activeWaveGrad.addColorStop(1, 'rgba(2, 132, 199, 0.65)');
+            activeWaveGrad.addColorStop(1, `rgba(${readAccentRgb('600', '#0284c7')}, 0.65)`);
           }
           ctx.fillStyle = activeWaveGrad;
         } else {
-          ctx.fillStyle = isDark ? 'rgba(56, 189, 248, 0.5)' : 'rgba(2, 132, 199, 0.5)';
+          ctx.fillStyle = isDark ? `rgba(${readAccentRgb('400', readAccent('400', '#38bdf8'))}, 0.5)` : `rgba(${readAccentRgb('600', '#0284c7')}, 0.5)`;
         }
         ctx.fill();
 
-        ctx.strokeStyle = isDark ? 'rgba(56, 189, 248, 0.95)' : 'rgba(2, 132, 199, 0.95)';
+        ctx.strokeStyle = isDark ? `rgba(${readAccentRgb('400', readAccent('400', '#38bdf8'))}, 0.95)` : `rgba(${readAccentRgb('600', '#0284c7')}, 0.95)`;
         ctx.lineWidth = 1.3;
         ctx.stroke();
         ctx.restore();
@@ -237,7 +253,7 @@ export const GrainSourceVisualizer: React.FC<GrainSourceVisualizerProps> = ({
         ctx.fillRect(0, 0, rStartX, h);
 
         // Range Start delimiter line & bracket handle
-        ctx.strokeStyle = '#38bdf8';
+        ctx.strokeStyle = readAccent('400', '#38bdf8');
         ctx.lineWidth = 1.5;
         ctx.beginPath();
         ctx.moveTo(rStartX, 0);
@@ -256,7 +272,7 @@ export const GrainSourceVisualizer: React.FC<GrainSourceVisualizerProps> = ({
         ctx.fillRect(rEndX, 0, w - rEndX, h);
 
         // Range End delimiter line & bracket handle
-        ctx.strokeStyle = '#38bdf8';
+        ctx.strokeStyle = readAccent('400', '#38bdf8');
         ctx.lineWidth = 1.5;
         ctx.beginPath();
         ctx.moveTo(rEndX, 0);
@@ -375,7 +391,7 @@ export const GrainSourceVisualizer: React.FC<GrainSourceVisualizerProps> = ({
 
       // 7. Playhead Position Cursor (Phase Plant Main Playhead Pointer)
       const playheadX = position * w;
-      ctx.strokeStyle = '#38bdf8';
+      ctx.strokeStyle = readAccent('400', '#38bdf8');
       ctx.lineWidth = 1.8;
       ctx.beginPath();
       ctx.moveTo(playheadX, 0);
@@ -383,7 +399,7 @@ export const GrainSourceVisualizer: React.FC<GrainSourceVisualizerProps> = ({
       ctx.stroke();
 
       // Top triangle pointer
-      ctx.fillStyle = '#38bdf8';
+      ctx.fillStyle = readAccent('400', '#38bdf8');
       ctx.beginPath();
       ctx.moveTo(playheadX - 4, 0);
       ctx.lineTo(playheadX + 4, 0);
@@ -511,24 +527,42 @@ export const GrainSourceVisualizer: React.FC<GrainSourceVisualizerProps> = ({
     if (!files || files.length === 0) return;
 
     const file = files[0];
-    if (!file.name.match(/\.(wav|mp3|ogg|flac|aac|m4a)$/i)) return;
+    if (importingRef.current) return;
+    if (!file.name.match(/\.(wav|mp3|ogg|flac|aac|m4a)$/i)) {
+      setImportError('请选择 WAV、MP3、OGG、FLAC、AAC 或 M4A 音频。');
+      return;
+    }
+    if (file.size > MAX_IMPORTED_AUDIO_BYTES) {
+      setImportError('音频文件不能超过 64 MB，请先裁剪所需片段。');
+      return;
+    }
+    importingRef.current = true;
+    setIsImporting(true);
+    setImportError(null);
 
     let tempCtx: AudioContext | null = null;
     try {
       const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
-      if (!AudioCtxClass) return;
-      tempCtx = new AudioCtxClass();
+      if (!AudioCtxClass) throw new Error('当前环境不支持音频导入。');
       const arrayBuffer = await file.arrayBuffer();
+      if (!mountedRef.current) return;
+      tempCtx = new AudioCtxClass();
+      importContextRef.current = tempCtx;
       const decodedBuffer = await tempCtx.decodeAudioData(arrayBuffer);
+      if (!mountedRef.current) return;
 
       const registered = registerCustomAudioSample(tempCtx, file.name, decodedBuffer);
       onCustomSampleLoaded?.(registered.id);
     } catch (err) {
-      console.warn('[GrainSourceVisualizer] Failed to decode dropped audio file:', err);
+      if (mountedRef.current) setImportError(err instanceof Error && !(err instanceof DOMException)
+        ? err.message : '无法读取该音频，请检查文件后重试。');
     } finally {
-      if (tempCtx && typeof tempCtx.close === 'function') {
-        tempCtx.close().catch(() => {});
+      if (tempCtx && importContextRef.current === tempCtx) {
+        importContextRef.current = null;
+        void tempCtx.close().catch(() => {});
       }
+      importingRef.current = false;
+      if (mountedRef.current) setIsImporting(false);
     }
   };
 
@@ -547,6 +581,7 @@ export const GrainSourceVisualizer: React.FC<GrainSourceVisualizerProps> = ({
       }}
       role="region"
       aria-label="Granular Source Waveform & Interactive Playhead Scope"
+      aria-busy={isImporting}
     >
       <canvas
         ref={canvasRef}
@@ -603,6 +638,13 @@ export const GrainSourceVisualizer: React.FC<GrainSourceVisualizerProps> = ({
       </div>
 
       {/* Drag & Drop Overlay */}
+      {(isImporting || importError) && (
+        <div role={importError ? 'alert' : 'status'} className={`absolute inset-x-2 bottom-5 rounded border px-2 py-1 text-[10px] ${
+          isDark ? 'border-neutral-700 bg-neutral-950/95 text-slate-200' : 'border-neutral-300 bg-white/95 text-neutral-800'
+        }`}>
+          {importError ?? '正在加载音频，请稍候…'}
+        </div>
+      )}
       {isDragOverFile && (
         <div className="absolute inset-0 bg-sky-950/85 backdrop-blur-xs flex items-center justify-center pointer-events-none">
           <div className="border border-sky-400/80 border-dashed rounded px-3 py-1.5 text-center">

@@ -225,11 +225,6 @@ export class EqModule implements AudioEffectNode {
       this.currentParams.high = targetHigh;
       this.scheduleBandFilter(this.highFilter, targetHigh.frequency, targetHigh.gain, targetHigh.q, now, rampTimeConstant);
     }
-
-    // MockAudioContext advanceTime support for tests
-    if ((this.ctx as any)?.advanceTime) {
-      (this.ctx as any).advanceTime(rampTimeConstant * 3);
-    }
   }
 
   /**

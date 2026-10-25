@@ -5,3 +5,8 @@ export * from './GrainEnvelopeScope';
 export * from './GrainSourceVisualizer';
 export * from './SignalFlowGraph';
 export * from './WavetableVisualizer';
+export * from './OscACard';
+export * from './GranularCard';
+export * from './OscBCard';
+export * from './DroneCard';
+export * from './AmbientCard';

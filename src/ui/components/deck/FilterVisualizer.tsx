@@ -1,4 +1,5 @@
 import React, { useMemo } from 'react';
+import { readAccent } from '../../theme/deckPalette';
 import type { FilterType } from '../../../types/audio';
 
 interface FilterVisualizerProps {
@@ -109,6 +110,10 @@ export const FilterVisualizer: React.FC<FilterVisualizerProps> = ({
   const effectiveCutoff = liveModCutoff !== undefined ? liveModCutoff : cutoff;
   const effectiveResonance = liveModResonance !== undefined ? liveModResonance : resonance;
 
+  // Soft palette accent driving the response curve and gradient fill
+  const accBase = readAccent(isDark ? '400' : '600', isDark ? '#38bdf8' : '#0284c7');
+  const accSoft = readAccent('300', '#7dd3fc');
+
   const width = 200;
   const height = 58;
 
@@ -182,12 +187,12 @@ export const FilterVisualizer: React.FC<FilterVisualizerProps> = ({
       >
         <defs>
           <linearGradient id="filterAreaGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#38bdf8" stopOpacity={isDark ? '0.22' : '0.18'} />
-            <stop offset="100%" stopColor="#38bdf8" stopOpacity="0.0" />
+            <stop offset="0%" stopColor={accBase} stopOpacity={isDark ? '0.22' : '0.18'} />
+            <stop offset="100%" stopColor={accBase} stopOpacity="0.0" />
           </linearGradient>
           <linearGradient id="modBeadGrad" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" stopColor="#38bdf8" />
-            <stop offset="100%" stopColor="#22d3ee" />
+            <stop offset="0%" stopColor={accBase} />
+            <stop offset="100%" stopColor={accSoft} />
           </linearGradient>
         </defs>
 
@@ -229,7 +234,7 @@ export const FilterVisualizer: React.FC<FilterVisualizerProps> = ({
           y1="0"
           x2={cutoffX}
           y2={height}
-          stroke={isModulated ? '#22d3ee' : isDark ? '#38bdf8' : '#0284c7'}
+          stroke={isModulated ? accSoft : accBase}
           strokeWidth={isModulated ? '1.4' : '1.0'}
           strokeDasharray={isModulated ? '3 2' : 'none'}
           strokeOpacity={isModulated ? '0.85' : '0.45'}
@@ -239,7 +244,7 @@ export const FilterVisualizer: React.FC<FilterVisualizerProps> = ({
         <path
           d={pathData}
           fill="none"
-          stroke={isModulated ? '#38bdf8' : isDark ? '#7dd3fc' : '#0284c7'}
+          stroke={isModulated ? accBase : accSoft}
           strokeWidth="1.8"
           strokeLinecap="round"
           strokeLinejoin="round"

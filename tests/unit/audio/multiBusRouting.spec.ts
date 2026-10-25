@@ -60,28 +60,31 @@ describe('Multi-BUS Audio Routing & Effect Chain Isolation', () => {
 
       // Route OSC A to Lane A
       engine.setSourceRoute('oscA', 'laneA');
+      ctx.advanceTime(1); // Allow scheduled anti-click ramps to settle.
       expect(engine.getSourceRoutes().oscA).toBe('laneA');
-      expect((oscAGains.toA.gain as any)._value ?? oscAGains.toA.gain.value).toBe(1.0);
-      expect((oscAGains.toB.gain as any)._value ?? oscAGains.toB.gain.value).toBe(0.0);
-      expect((oscAGains.toThru.gain as any)._value ?? oscAGains.toThru.gain.value).toBe(0.0);
+      expect(oscAGains.toA.gain.value).toBeCloseTo(1.0, 6);
+      expect(oscAGains.toB.gain.value).toBeCloseTo(0.0, 6);
+      expect(oscAGains.toThru.gain.value).toBeCloseTo(0.0, 6);
 
       // Route Granular to Lane B
       engine.setSourceRoute('granular', 'laneB');
+      ctx.advanceTime(1); // Allow scheduled anti-click ramps to settle.
       expect(engine.getSourceRoutes().granular).toBe('laneB');
-      expect((granularGains.toA.gain as any)._value ?? granularGains.toA.gain.value).toBe(0.0);
-      expect((granularGains.toB.gain as any)._value ?? granularGains.toB.gain.value).toBe(1.0);
-      expect((granularGains.toThru.gain as any)._value ?? granularGains.toThru.gain.value).toBe(0.0);
+      expect(granularGains.toA.gain.value).toBeCloseTo(0.0, 6);
+      expect(granularGains.toB.gain.value).toBeCloseTo(1.0, 6);
+      expect(granularGains.toThru.gain.value).toBeCloseTo(0.0, 6);
 
       // Route OSC B to Thru
       engine.setSourceRoute('oscB', 'thru');
+      ctx.advanceTime(1); // Allow scheduled anti-click ramps to settle.
       expect(engine.getSourceRoutes().oscB).toBe('thru');
-      expect((oscBGains.toA.gain as any)._value ?? oscBGains.toA.gain.value).toBe(0.0);
-      expect((oscBGains.toB.gain as any)._value ?? oscBGains.toB.gain.value).toBe(0.0);
-      expect((oscBGains.toThru.gain as any)._value ?? oscBGains.toThru.gain.value).toBe(1.0);
+      expect(oscBGains.toA.gain.value).toBeCloseTo(0.0, 6);
+      expect(oscBGains.toB.gain.value).toBeCloseTo(0.0, 6);
+      expect(oscBGains.toThru.gain.value).toBeCloseTo(1.0, 6);
 
       // Sub drone defaults to Lane A
       expect(engine.getSourceRoutes().drone).toBe('laneA');
-      expect((droneGains.toA.gain as any)._value ?? droneGains.toA.gain.value).toBe(1.0);
+      expect(droneGains.toA.gain.value).toBeCloseTo(1.0, 6);
     });
 
     it('does NOT reset sound source routes when effect knobs are turned without sourceRoutes', async () => {
@@ -208,6 +211,62 @@ describe('Multi-BUS Audio Routing & Effect Chain Isolation', () => {
       expect(secondAdsr).toBeInstanceOf(AdsrModule);
       expect(primaryAdsr).not.toBe(secondAdsr);
       expect(secondAdsr?.id).toBe('adsr_2');
+    });
+
+    it('maintains absolute parameter independence for dynamically added sound source instances', async () => {
+      const ctx = new MockAudioContext({ sampleRate: 44100 });
+      const engine = new AudioEngine(ctx as unknown as AudioContext);
+      await engine.init();
+
+      // Dynamically add a cloned ambient instance with different parameters
+      const clonedNode = engine.addSoundSource('ambient_1', 'ambient', {
+        sampleId: 'tibetanSingingBowl',
+        gain: 0.88,
+        tone: 0.9,
+        bypass: false
+      }, 'laneB');
+
+      expect(clonedNode).toBeDefined();
+
+      // Check params recorded in engine
+      const paramsBefore = engine.getChannelStripParams();
+      expect(paramsBefore.instances?.ambient_1?.sampleId).toBe('tibetanSingingBowl');
+      expect(paramsBefore.instances?.ambient_1?.gain).toBe(0.88);
+
+      // Updating primary ambient does NOT touch ambient_1
+      engine.updateChannelStrip({
+        ambient: {
+          sampleId: 'oceanTide',
+          gain: 0.25
+        }
+      });
+
+      const paramsAfterPrimaryUpdate = engine.getChannelStripParams();
+      expect(paramsAfterPrimaryUpdate.ambient?.sampleId).toBe('oceanTide');
+      expect(paramsAfterPrimaryUpdate.ambient?.gain).toBe(0.25);
+      expect(paramsAfterPrimaryUpdate.instances?.ambient_1?.sampleId).toBe('tibetanSingingBowl');
+      expect(paramsAfterPrimaryUpdate.instances?.ambient_1?.gain).toBe(0.88);
+
+      // Updating ambient_1 does NOT touch primary ambient
+      engine.updateChannelStrip({
+        instances: {
+          ambient_1: {
+            sampleId: 'lakeLapping',
+            gain: 0.42
+          }
+        }
+      });
+
+      const paramsAfterCloneUpdate = engine.getChannelStripParams();
+      expect(paramsAfterCloneUpdate.ambient?.sampleId).toBe('oceanTide');
+      expect(paramsAfterCloneUpdate.ambient?.gain).toBe(0.25);
+      expect(paramsAfterCloneUpdate.instances?.ambient_1?.sampleId).toBe('lakeLapping');
+      expect(paramsAfterCloneUpdate.instances?.ambient_1?.gain).toBe(0.42);
+
+      // Removing ambient_1 cleans up instances state
+      engine.removeSoundSource('ambient_1');
+      const paramsAfterRemoval = engine.getChannelStripParams();
+      expect(paramsAfterRemoval.instances?.ambient_1).toBeUndefined();
     });
   });
 });

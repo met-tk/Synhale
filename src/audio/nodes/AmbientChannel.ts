@@ -1,3 +1,4 @@
+import { sanitizeParameterPatch } from '../dsp/parameterSafety';
 /**
  * Synhale 2 - AmbientChannel (Organic Ambient Soundscape Generator)
  * 
@@ -251,14 +252,8 @@ export class AmbientChannel implements AudioSourceNode {
     const now = this.ctx.currentTime;
     if (immediate) {
       this.toneFilter.frequency.setValueAtTime(cutoff, now);
-      if ((this.ctx as any)?.advanceTime) {
-        (this.toneFilter.frequency as any)._value = cutoff;
-      }
     } else {
       this.toneFilter.frequency.setTargetAtTime(cutoff, now, 0.02);
-      if ((this.ctx as any)?.advanceTime) {
-        (this.toneFilter.frequency as any)._value = cutoff;
-      }
     }
   }
 
@@ -321,6 +316,7 @@ export class AmbientChannel implements AudioSourceNode {
 
   public setParams(params: Partial<AmbientSoundscapeParams>): void {
     if (this.isDisposed) return;
+    params = sanitizeParameterPatch(params);
     const now = this.ctx.currentTime;
 
     if (params.sampleId !== undefined && params.sampleId !== this.currentParams.sampleId) {
@@ -330,9 +326,6 @@ export class AmbientChannel implements AudioSourceNode {
     if (params.gain !== undefined) {
       this.currentParams.gain = Math.max(0, Math.min(1, params.gain));
       this.trackGain.gain.setTargetAtTime(this.currentParams.gain, now, 0.015);
-      if ((this.ctx as any)?.advanceTime) {
-        (this.trackGain.gain as any)._value = this.currentParams.gain;
-      }
     }
 
     if (params.tone !== undefined) {
@@ -343,9 +336,6 @@ export class AmbientChannel implements AudioSourceNode {
     if (params.width !== undefined) {
       this.currentParams.width = Math.max(0, Math.min(1, params.width));
       this.sideWidthGain.gain.setTargetAtTime(this.currentParams.width, now, 0.015);
-      if ((this.ctx as any)?.advanceTime) {
-        (this.sideWidthGain.gain as any)._value = this.currentParams.width;
-      }
     }
 
     if (params.breathSync !== undefined) {
@@ -381,9 +371,6 @@ export class AmbientChannel implements AudioSourceNode {
     // Dynamic swell: at syncDepth 1.0, expands between 20% and 100% volume
     const targetGain = (1.0 - syncDepth) + syncDepth * (0.2 + 0.8 * clampedMacro);
     this.breathGainNode.gain.setTargetAtTime(targetGain, this.ctx.currentTime, 0.03);
-    if ((this.ctx as any)?.advanceTime) {
-      (this.breathGainNode.gain as any)._value = targetGain;
-    }
   }
 
   public purge(): void {
@@ -412,13 +399,13 @@ export class AmbientChannel implements AudioSourceNode {
 
   public dispose(): void {
     if (this.isDisposed) return;
+    this.stop(0);
     this.isDisposed = true;
     for (const t of this.switchTimers) {
       clearTimeout(t);
     }
     this.switchTimers = [];
 
-    this.stop(0);
     this.disconnect();
 
     if (this.bufferSource) {

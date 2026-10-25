@@ -203,6 +203,35 @@ describe('Audio Nodes & Channel Strip Units', () => {
 
       oscA.dispose();
     });
+
+    it('calibrates channel track gain range so 100% UI level corresponds to 50% physical gain', () => {
+      const oscA = new OscAChannel(ctx as unknown as BaseAudioContext);
+      const trackGain = (oscA as any).trackGain as GainNode;
+
+      // 1. Initial default gain (0.8) scaled to 0.4 physical gain
+      expect(trackGain.gain.value).toBeCloseTo(0.8 * 0.5, 3);
+      expect(oscA.getParams().gain).toBe(0.8);
+
+      // 2. Setting 100% (1.0) gain scales to 0.5 physical gain
+      oscA.setParams({ gain: 1.0 });
+      ctx.advanceTime(0.05);
+      expect(trackGain.gain.value).toBeCloseTo(0.5, 2);
+      expect(oscA.getParams().gain).toBe(1.0);
+
+      // 3. Setting 50% (0.5) gain scales to 0.25 physical gain
+      oscA.setParams({ gain: 0.5 });
+      ctx.advanceTime(0.05);
+      expect(trackGain.gain.value).toBeCloseTo(0.25, 2);
+      expect(oscA.getParams().gain).toBe(0.5);
+
+      // 4. Clamping and boundary checks
+      oscA.setParams({ gain: 0.0 });
+      ctx.advanceTime(0.05);
+      expect(trackGain.gain.value).toBeCloseTo(0.0, 2);
+      expect(oscA.getParams().gain).toBe(0.0);
+
+      oscA.dispose();
+    });
   });
 
   describe('OscBChannel', () => {
@@ -377,6 +406,7 @@ describe('Audio Nodes & Channel Strip Units', () => {
         damping: 0.6,
         mix: 0.5
       });
+      ctx.advanceTime(1); // Allow scheduled anti-click ramps to settle.
 
       const params = reverb.getParams();
       expect(params.decayTime).toBe(4.5);
@@ -390,6 +420,7 @@ describe('Audio Nodes & Channel Strip Units', () => {
 
       // Test restore
       reverb.restore();
+      ctx.advanceTime(1); // Allow scheduled anti-click ramps to settle.
       expect(reverb.reverbInGain.gain.value).toBe(1.0);
       expect(reverb.wetGain.gain.value).toBeCloseTo(Math.SQRT1_2, 4);
 

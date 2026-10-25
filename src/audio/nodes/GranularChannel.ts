@@ -24,6 +24,7 @@ import {
   DEFAULT_PARTICLE_PARAMS
 } from '../../types/audio';
 import { WAVETABLE_DEFINITIONS } from '../dsp/wavetableData';
+import { sanitizeParameterPatch } from '../dsp/parameterSafety';
 import { getRandomScaleNote, getScaleFrequency, SCALES } from '../dsp/scaleQuantizer';
 import {
   GRANULAR_SAMPLE_PRESETS,
@@ -94,6 +95,7 @@ export class GranularChannel implements AudioSourceNode {
 
   public isStarted = false;
   public isDisposed = false;
+  private isPurged = false;
 
   public onParticleTrigger?: (grain: ParticleVisualGrain) => void;
 
@@ -186,6 +188,7 @@ export class GranularChannel implements AudioSourceNode {
   // 动态更新粒子物理参数：包含采样切换、增益声像平滑过渡、硬件级旁路切换及微粒包络深度合并
   setParams(params: Partial<GranularParams>): void {
     if (this.isDisposed) return;
+    params = sanitizeParameterPatch(params);
     const now = this.ctx.currentTime;
 
     // Sample selection
@@ -196,19 +199,22 @@ export class GranularChannel implements AudioSourceNode {
 
     // Gain adjustment
     if (params.gain !== undefined) {
-      this.currentParams.gain = Math.max(0, Math.min(1, params.gain));
+      params.gain = Math.max(0, Math.min(1, params.gain));
+      this.currentParams.gain = params.gain;
       this.channelGain.gain.setTargetAtTime(this.currentParams.gain, now, 0.015);
     }
 
     // Pan adjustment
     if (params.pan !== undefined) {
-      this.currentParams.pan = Math.max(-1, Math.min(1, params.pan));
+      params.pan = Math.max(-1, Math.min(1, params.pan));
+      this.currentParams.pan = params.pan;
       this.channelPanner.pan.setTargetAtTime(this.currentParams.pan, now, 0.02);
     }
 
     // Base Frequency
     if (params.baseFreq !== undefined) {
-      this.currentParams.baseFreq = Math.max(20, Math.min(2000, params.baseFreq));
+      params.baseFreq = Math.max(20, Math.min(2000, params.baseFreq));
+      this.currentParams.baseFreq = params.baseFreq;
     }
 
     // Bypass switching (5ms anti-click crossfade)
@@ -252,7 +258,7 @@ export class GranularChannel implements AudioSourceNode {
 
   // 获取当前粒子通道参数快照
   getParams(): GranularParams {
-    return { ...this.currentParams };
+    return { ...this.currentParams, grainEnvelope: { ...this.currentParams.grainEnvelope } };
   }
 
   // 将粒子通道主音频输出节点连接至目标节点
@@ -280,7 +286,7 @@ export class GranularChannel implements AudioSourceNode {
 
   // 启动 40ms 超前调度定时器，驱动粒子发射与时序生成
   private startParticleScheduler(): void {
-    if (this.particleTimer !== null || this.isDisposed || !this.isStarted) return;
+    if (this.particleTimer !== null || this.isDisposed || this.isPurged || !this.isStarted) return;
     this.nextParticleTime = this.ctx.currentTime + 0.01;
     this.scheduleParticles(); // 立刻执行首次调度，消除 40ms 初始启动延迟
 
@@ -299,7 +305,7 @@ export class GranularChannel implements AudioSourceNode {
 
   // 核心微粒调度引擎：在 120ms Lookahead 时间窗口内计算发射概率、时序抖动并调度微粒发声
   private scheduleParticles(): void {
-    if (this.isDisposed || !this.isStarted || this.currentParams.bypass) return;
+    if (this.isDisposed || this.isPurged || !this.isStarted || this.currentParams.bypass) return;
 
     const lookAhead = 0.12; // 120ms lookahead
     const particleCfg: ParticleParams = {
@@ -698,11 +704,16 @@ export class GranularChannel implements AudioSourceNode {
 
   // 统一音频源硬切接口：瞬间消音在播微粒，保障效果链重排零残留
   public purge(): void {
+    if (this.isDisposed) return;
+    this.isPurged = true;
+    this.stopParticleScheduler();
     this.purgeActiveVoices();
   }
 
   // 统一音频源恢复接口：重置时间基准并重新拉起微粒调度循环
   public restore(): void {
+    if (this.isDisposed) return;
+    this.isPurged = false;
     if (this.isStarted && !this.currentParams.bypass) {
       this.nextParticleTime = this.ctx.currentTime + 0.01;
       this.startParticleScheduler();

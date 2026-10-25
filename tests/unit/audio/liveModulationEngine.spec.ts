@@ -39,12 +39,14 @@ describe('Live Modulation Engine & Sound Leakage Elimination Suite', () => {
 
     // Call updateBreathModulation at the end of holdOut stage (breathMacro = 0.0, stage = 'holdOut', stageProgress = 1.0)
     engine.updateBreathModulation(0.0, 'holdOut', 1.0);
+    ctx.advanceTime(1); // Allow scheduled anti-click ramps to settle.
 
     // Assert that the effective gain in masterVolumeGain is exactly 0.0
-    expect(engine.masterVolumeGain.gain.value).toBe(0.0);
+    expect(engine.masterVolumeGain.gain.value).toBeCloseTo(0.0, 6);
 
     // Now advance to inhale stage where value is 1.0
     engine.updateBreathModulation(1.0, 'inhale', 1.0);
+    ctx.advanceTime(1); // Allow scheduled anti-click ramps to settle.
     expect(engine.masterVolumeGain.gain.value).toBeGreaterThan(0.5);
 
     engine.dispose();

@@ -17,7 +17,9 @@ describe('AudioEngine Full Pipeline & 0ms Zero-Residue Hard Cut', () => {
     expect(engine.granular).toBeDefined();
     expect(engine.oscB).toBeDefined();
     expect(engine.drone).toBeDefined();
-    expect(engine.preMixBus).toBeDefined();
+    expect(engine.laneBusA).toBeDefined();
+    expect(engine.laneBusB).toBeDefined();
+    expect(engine.thruBus).toBeDefined();
     expect(engine.drive).toBeDefined();
     expect(engine.filter).toBeDefined();
     expect(engine.delay).toBeDefined();
@@ -80,6 +82,7 @@ describe('AudioEngine Full Pipeline & 0ms Zero-Residue Hard Cut', () => {
       delay: { feedback: 0.75, mix: 0.5 },
       reverb: { mix: 0.5 }
     });
+    ctx.advanceTime(1); // Allow scheduled anti-click ramps to settle.
 
     // Verify initial values
     expect(engine.masterCutGain.gain.value).toBe(1.0);

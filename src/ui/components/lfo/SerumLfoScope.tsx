@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
 import type { LfoShape } from '../../../types/audio';
 import { evaluateLfoWaveform } from '../../../audio/dsp/lfoMath';
+import { readAccent, readAccentRgb } from '../../theme/deckPalette';
 
 export interface SerumLfoScopeProps {
   id: string;
@@ -154,11 +155,15 @@ export const SerumLfoScope: React.FC<SerumLfoScopeProps> = ({
           <path
             d={pathData}
             fill="none"
-            stroke={isDark ? "#38bdf8" : "#0284c7"}
+            stroke={readAccent(isDark ? '400' : '600', isDark ? '#38bdf8' : '#0284c7')}
             strokeWidth="1.75"
             strokeLinecap="round"
             strokeLinejoin="round"
-            className={isDark ? "filter drop-shadow-[0_0_3px_rgba(56,189,248,0.5)]" : "filter drop-shadow-[0_0_2px_rgba(2,132,199,0.3)]"}
+            style={{
+              filter: isDark
+                ? `drop-shadow(0 0 3px rgba(${readAccentRgb('400', '#38bdf8')}, 0.5))`
+                : `drop-shadow(0 0 2px rgba(${readAccentRgb('600', '#0284c7')}, 0.3))`
+            }}
           />
 
           {/* Phase Playhead Laser & Dot */}
@@ -169,7 +174,7 @@ export const SerumLfoScope: React.FC<SerumLfoScopeProps> = ({
                 y1={padY}
                 x2={playheadX}
                 y2={height - padY}
-                stroke={isDark ? "#38bdf8" : "#0284c7"}
+                stroke={readAccent(isDark ? '400' : '600', isDark ? '#38bdf8' : '#0284c7')}
                 strokeWidth="1"
                 strokeOpacity={isDark ? "0.4" : "0.55"}
                 strokeDasharray="2,2"
@@ -178,8 +183,12 @@ export const SerumLfoScope: React.FC<SerumLfoScopeProps> = ({
                 cx={playheadX}
                 cy={playheadY}
                 r="3"
-                fill={isDark ? "#ffffff" : "#0284c7"}
-                className={isDark ? "filter drop-shadow-[0_0_4px_#38bdf8]" : "filter drop-shadow-[0_0_3px_rgba(2,132,199,0.5)]"}
+                fill={isDark ? "#ffffff" : readAccent('600', '#0284c7')}
+                style={{
+                  filter: isDark
+                    ? `drop-shadow(0 0 4px ${readAccent('400', '#38bdf8')})`
+                    : `drop-shadow(0 0 3px rgba(${readAccentRgb('600', '#0284c7')}, 0.5))`
+                }}
               />
             </>
           )}
@@ -187,13 +196,17 @@ export const SerumLfoScope: React.FC<SerumLfoScopeProps> = ({
 
         {/* Top-Right Micro Rate & Polarity HUD */}
         <div className={`absolute top-1 right-1.5 text-[9px] font-mono pointer-events-none flex items-center gap-1.5 ${
-          isDark ? 'text-sky-400/80' : 'text-sky-600 font-semibold'
+          isDark ? 'text-sky-400/80' : 'text-sky-700 font-semibold'
         }`}>
           <span>{rate.toFixed(2)}Hz</span>
-          <span className={`px-1 py-0.5 rounded text-[8px] border font-semibold ${
+          <span className={`px-1.5 py-0.5 rounded text-[8px] border font-bold uppercase tracking-wider ${
             isUni
-              ? 'border-purple-500/50 bg-purple-950/60 text-purple-300'
-              : 'border-sky-500/40 bg-sky-950/40 text-sky-400'
+              ? isDark
+                ? 'border-purple-500/50 bg-purple-950/60 text-purple-300'
+                : 'border-purple-300 bg-purple-100 text-purple-800'
+              : isDark
+                ? 'border-sky-500/50 bg-sky-950/60 text-sky-300'
+                : 'border-sky-300 bg-sky-100 text-sky-800'
           }`}>
             {isUni ? 'UNI' : 'BI'}
           </span>

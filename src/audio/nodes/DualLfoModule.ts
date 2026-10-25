@@ -1,3 +1,4 @@
+import { sanitizeParameterPatch } from '../dsp/parameterSafety';
 /**
  * Synhale 2 - DualLfoModule (Organic Pitch Drift, Filter Breathing, Tremolo & Spatial Pan)
  * 
@@ -140,6 +141,7 @@ export class DualLfoModule {
 
   setLfo1Params(params: Partial<Lfo1Params>): void {
     if (this.isDisposed) return;
+    params = sanitizeParameterPatch(params);
     const now = this.ctx.currentTime;
 
     if (params.sync !== undefined) {
@@ -177,6 +179,7 @@ export class DualLfoModule {
 
   setLfo2Params(params: Partial<Lfo2Params>): void {
     if (this.isDisposed) return;
+    params = sanitizeParameterPatch(params);
     const now = this.ctx.currentTime;
 
     if (params.sync !== undefined) {
@@ -318,8 +321,8 @@ export class DualLfoModule {
 
   dispose(): void {
     if (this.isDisposed) return;
-    this.isDisposed = true;
     this.stop(0);
+    this.isDisposed = true;
     this.disconnectAll();
 
     try {

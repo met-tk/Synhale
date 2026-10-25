@@ -32,18 +32,20 @@ describe('BUS B Topology, Equal-Power Mixing and Multi-Instance Processing', () 
 
     // Route OSC B (Noise) to laneB
     engine.setSourceRoute('oscB', 'laneB');
+    ctx.advanceTime(1); // Allow scheduled anti-click ramps to settle.
     const routeGains = (engine as any).sourceRouteGains.get('oscB');
 
     expect(routeGains).toBeDefined();
-    expect(routeGains.toA.gain.value).toBe(0.0);
-    expect(routeGains.toB.gain.value).toBe(1.0);
-    expect(routeGains.toThru.gain.value).toBe(0.0);
+    expect(routeGains.toA.gain.value).toBeCloseTo(0.0, 6);
+    expect(routeGains.toB.gain.value).toBeCloseTo(1.0, 6);
+    expect(routeGains.toThru.gain.value).toBeCloseTo(0.0, 6);
 
     // Route Sub Drone to laneB
     engine.setSourceRoute('drone', 'laneB');
+    ctx.advanceTime(1); // Allow scheduled anti-click ramps to settle.
     const droneGains = (engine as any).sourceRouteGains.get('drone');
-    expect(droneGains.toA.gain.value).toBe(0.0);
-    expect(droneGains.toB.gain.value).toBe(1.0);
+    expect(droneGains.toA.gain.value).toBeCloseTo(0.0, 6);
+    expect(droneGains.toB.gain.value).toBeCloseTo(1.0, 6);
   });
 
   it('implements strict equal-power crossfade between BUS A and BUS B (cos^2 + sin^2 = 1)', async () => {
@@ -64,18 +66,21 @@ describe('BUS B Topology, Equal-Power Mixing and Multi-Instance Processing', () 
 
     // 2. Full BUS A (busMix = 0.0)
     engine.setBusMix(0.0);
+    ctx.advanceTime(1); // Allow scheduled anti-click ramps to settle.
     expect(engine.getBusMix()).toBe(0.0);
     expect(busGainA.gain.value).toBeCloseTo(1.0, 4);
     expect(busGainB.gain.value).toBeCloseTo(0.0, 4);
 
     // 3. Full BUS B (busMix = 1.0)
     engine.setBusMix(1.0);
+    ctx.advanceTime(1); // Allow scheduled anti-click ramps to settle.
     expect(engine.getBusMix()).toBe(1.0);
     expect(busGainA.gain.value).toBeCloseTo(0.0, 4);
     expect(busGainB.gain.value).toBeCloseTo(1.0, 4);
 
     // 4. Quarter point (busMix = 0.25)
     engine.setBusMix(0.25);
+    ctx.advanceTime(1); // Allow scheduled anti-click ramps to settle.
     expect(engine.getBusMix()).toBe(0.25);
     const qCos = Math.cos(0.25 * Math.PI * 0.5);
     const qSin = Math.sin(0.25 * Math.PI * 0.5);
@@ -85,15 +90,18 @@ describe('BUS B Topology, Equal-Power Mixing and Multi-Instance Processing', () 
 
     // 5. Out of bounds clamping
     engine.setBusMix(-0.5);
+    ctx.advanceTime(1); // Allow scheduled anti-click ramps to settle.
     expect(engine.getBusMix()).toBe(0.0);
     expect(busGainA.gain.value).toBeCloseTo(1.0, 4);
 
     engine.setBusMix(1.5);
+    ctx.advanceTime(1); // Allow scheduled anti-click ramps to settle.
     expect(engine.getBusMix()).toBe(1.0);
     expect(busGainB.gain.value).toBeCloseTo(1.0, 4);
 
     // 6. Update through updateEffects
     engine.updateEffects({ busMix: 0.75 });
+    ctx.advanceTime(1); // Allow scheduled anti-click ramps to settle.
     expect(engine.getBusMix()).toBe(0.75);
     expect(engine.getEffectsParams().busMix).toBe(0.75);
   });
@@ -333,6 +341,7 @@ describe('BUS B Topology, Equal-Power Mixing and Multi-Instance Processing', () 
 
     // Set busLevelA to 0.50
     engine.updateEffects({ busLevelA: 0.50 });
+    ctx.advanceTime(1); // Allow scheduled anti-click ramps to settle.
     expect(engine.getBusLevelA()).toBe(0.50);
     expect(engine.getEffectsParams().busLevelA).toBe(0.50);
     const midCos = Math.cos(0.5 * Math.PI * 0.5);
@@ -340,6 +349,7 @@ describe('BUS B Topology, Equal-Power Mixing and Multi-Instance Processing', () 
 
     // Set busLevelB to 0.80
     engine.updateEffects({ busLevelB: 0.80 });
+    ctx.advanceTime(1); // Allow scheduled anti-click ramps to settle.
     expect(engine.getBusLevelB()).toBe(0.80);
     expect(engine.getEffectsParams().busLevelB).toBe(0.80);
     const midSin = Math.sin(0.5 * Math.PI * 0.5);
@@ -347,6 +357,7 @@ describe('BUS B Topology, Equal-Power Mixing and Multi-Instance Processing', () 
 
     // Set busMix to 0.0 (100% BUS A) while busLevelA is 0.50
     engine.setBusMix(0.0);
+    ctx.advanceTime(1); // Allow scheduled anti-click ramps to settle.
     expect(busGainA.gain.value).toBeCloseTo(1.0 * 0.50, 4);
     expect(busGainB.gain.value).toBeCloseTo(0.0, 4);
   });

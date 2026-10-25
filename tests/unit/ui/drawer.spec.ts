@@ -119,7 +119,7 @@ describe('Mobile Bottom Sheet Drawer (F21)', () => {
       })
     );
 
-    expect(screen.getByText('No items available')).toBeDefined();
+    expect(screen.getByText('暂无内容')).toBeDefined();
   });
 
   it('supports 2-column layout and hides description when hideDescription is true', () => {

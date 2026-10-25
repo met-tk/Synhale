@@ -16,6 +16,7 @@
  */
 
 import { DEFAULT_ADSR_PARAMS, type AdsrParams, type AudioEffectNode } from '../../types/audio';
+import { sanitizeParameterPatch } from '../dsp/parameterSafety';
 
 export { DEFAULT_ADSR_PARAMS };
 
@@ -171,6 +172,7 @@ export class AdsrModule implements AudioEffectNode {
    */
   setParams(params: Partial<AdsrParams>): void {
     if (this.isDisposed) return;
+    params = sanitizeParameterPatch(params);
 
     if (params.attack !== undefined) {
       this.currentParams.attack = Math.max(0.005, Math.min(15.0, params.attack));

@@ -33,7 +33,7 @@ describe('CustomRhythmModal UI Component', () => {
 
     // Dialog title
     expect(screen.getByRole('dialog', { name: '自定义呼吸节律' })).toBeDefined();
-    expect(screen.getByText('新增自定义呼吸模式')).toBeDefined();
+    expect(screen.getByText('新增节律')).toBeDefined();
 
     // 4 stages
     expect(screen.getByText('吸气')).toBeDefined();
@@ -117,7 +117,7 @@ describe('CustomRhythmModal UI Component', () => {
       />
     );
 
-    expect(screen.getByText('编辑自定义呼吸模式')).toBeDefined();
+    expect(screen.getByText('编辑节律')).toBeDefined();
     const input = screen.getByDisplayValue('深度冥想 5-3-7-3');
     expect(input).toBeDefined();
 

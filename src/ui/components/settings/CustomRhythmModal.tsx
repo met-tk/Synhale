@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useId } from 'react';
 import { createPortal } from 'react-dom';
 import { Wind, X, Plus, Minus, RotateCcw, Activity, Clock, Check } from 'lucide-react';
 import { UserRhythmConfig, saveUserRhythm } from '../../../breath/storage';
+import { useModalDialog } from '../../hooks/useModalDialog';
 
 export interface CustomRhythmModalProps {
   isOpen: boolean;
@@ -42,20 +43,22 @@ export const CustomRhythmModal: React.FC<CustomRhythmModalProps> = ({
   const [exhale, setExhale] = useState<number>(4.0);
   const [holdOut, setHoldOut] = useState<number>(4.0);
 
-  const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
+  const dialogRef = useModalDialog(isOpen, onClose);
+  const nameId = useId();
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   // Initialize or reset values when opened / rhythm changed
   useEffect(() => {
     if (isOpen) {
+      setSaveError(null);
       if (initialRhythm) {
-        const safeNum = (v: any, fallback: number) =>
-          typeof v === 'number' && Number.isFinite(v) ? Number(v.toFixed(1)) : fallback;
+        const safeNum = (v: unknown, fallback: number, min: number) =>
+          typeof v === 'number' && Number.isFinite(v) ? Math.max(min, Math.min(30, Number(v.toFixed(1)))) : fallback;
         setName(typeof initialRhythm.name === 'string' ? initialRhythm.name : '');
-        setInhale(safeNum(initialRhythm.inhale, 4.0));
-        setHoldIn(safeNum(initialRhythm.holdIn, 4.0));
-        setExhale(safeNum(initialRhythm.exhale, 4.0));
-        setHoldOut(safeNum(initialRhythm.holdOut, 4.0));
+        setInhale(safeNum(initialRhythm.inhale, 4.0, 0.5));
+        setHoldIn(safeNum(initialRhythm.holdIn, 4.0, 0));
+        setExhale(safeNum(initialRhythm.exhale, 4.0, 0.5));
+        setHoldOut(safeNum(initialRhythm.holdOut, 4.0, 0));
       } else {
         setName('');
         setInhale(4.0);
@@ -65,18 +68,6 @@ export const CustomRhythmModal: React.FC<CustomRhythmModalProps> = ({
       }
     }
   }, [isOpen, initialRhythm]);
-
-  // Handle ESC key dismiss without unneeded re-binding
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        onCloseRef.current();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen]);
 
   const totalDuration = useMemo(() => {
     return Number((inhale + holdIn + exhale + holdOut).toFixed(1));
@@ -112,14 +103,14 @@ export const CustomRhythmModal: React.FC<CustomRhythmModalProps> = ({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const finalName = name.trim() || `自定节律 · ${inhale}-${holdIn}-${exhale}-${holdOut}`;
-    const saved = saveUserRhythm({
-      id: initialRhythm?.id,
-      name: finalName,
-      inhale,
-      holdIn,
-      exhale,
-      holdOut
-    });
+    let saved: UserRhythmConfig;
+    try {
+      saved = saveUserRhythm({ id: initialRhythm?.id, name: finalName, inhale, holdIn, exhale, holdOut });
+      setSaveError(null);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : '保存失败，请重试。');
+      return;
+    }
     onSave(saved);
     onClose();
   };
@@ -167,10 +158,12 @@ export const CustomRhythmModal: React.FC<CustomRhythmModalProps> = ({
       onClick={onClose}
     >
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-label="自定义呼吸节律"
-        className={`relative w-full max-w-lg rounded-2xl border p-5 sm:p-6 shadow-2xl transition-all ${
+        className={`relative w-full max-w-lg max-h-[calc(100dvh-2rem)] overflow-y-auto overscroll-contain rounded-2xl border p-5 sm:p-6 shadow-2xl transition-all ${
           isDark
             ? 'border-neutral-800 bg-neutral-950 text-slate-100 shadow-[0_0_50px_rgba(0,0,0,0.8)]'
             : 'border-neutral-200 bg-white text-neutral-900 shadow-2xl'
@@ -187,7 +180,7 @@ export const CustomRhythmModal: React.FC<CustomRhythmModalProps> = ({
             </div>
             <div>
               <h2 className="text-sm font-semibold tracking-wide">
-                {initialRhythm ? '编辑自定义呼吸模式' : '新增自定义呼吸模式'}
+                {initialRhythm ? '编辑节律' : '新增节律'}
               </h2>
               <p className={`text-[11px] font-mono ${isDark ? 'text-slate-400' : 'text-neutral-500'}`}>
                 CUSTOM RESPIRATION PATTERN
@@ -212,7 +205,7 @@ export const CustomRhythmModal: React.FC<CustomRhythmModalProps> = ({
             <div className={`text-[10px] uppercase font-mono tracking-wider mb-1.5 flex items-center justify-between ${
               isDark ? 'text-slate-400' : 'text-neutral-500'
             }`}>
-              <span>快速载入标准模板</span>
+              <span>快速载入模板</span>
               <span className="text-[10px] lowercase font-normal opacity-70">点击载入对应秒数</span>
             </div>
             <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5">
@@ -237,17 +230,18 @@ export const CustomRhythmModal: React.FC<CustomRhythmModalProps> = ({
 
           {/* Name Input */}
           <div>
-            <label className={`text-[10px] uppercase font-mono tracking-wider block mb-1.5 ${
+            <label htmlFor={nameId} className={`text-[10px] uppercase font-mono tracking-wider block mb-1.5 ${
               isDark ? 'text-slate-400' : 'text-neutral-600'
             }`}>
-              节律名称 · RHYTHM NAME
+              节律名称
             </label>
             <input
+              id={nameId}
               type="text"
               placeholder={`自定节律 · ${inhale}-${holdIn}-${exhale}-${holdOut}`}
               value={name}
               onChange={e => setName(e.target.value)}
-              className={`w-full px-3 py-2 rounded-lg border text-xs focus:outline-none focus:border-sky-400 transition-colors ${
+              className={`w-full px-3 py-2 rounded-lg border text-xs max-md:text-base focus:outline-none focus:border-sky-400 transition-colors ${
                 isDark
                   ? 'border-neutral-800 bg-neutral-900/90 text-slate-100 placeholder:text-slate-600'
                   : 'border-neutral-300 bg-neutral-50 text-neutral-900 placeholder:text-neutral-400'
@@ -269,6 +263,7 @@ export const CustomRhythmModal: React.FC<CustomRhythmModalProps> = ({
                 <button
                   type="button"
                   onClick={() => handleStep(setInhale, -0.5, 0.5, 30.0)}
+                  aria-label="减少吸气时长"
                   disabled={inhale <= 0.5}
                   className={`w-7 h-7 rounded-lg border flex items-center justify-center transition-colors disabled:opacity-30 ${
                     isDark ? 'border-neutral-700 bg-neutral-800 text-slate-200 hover:bg-neutral-700' : 'border-neutral-300 bg-white text-neutral-800 hover:bg-neutral-100'
@@ -282,6 +277,7 @@ export const CustomRhythmModal: React.FC<CustomRhythmModalProps> = ({
                 <button
                   type="button"
                   onClick={() => handleStep(setInhale, 0.5, 0.5, 30.0)}
+                  aria-label="增加吸气时长"
                   disabled={inhale >= 30.0}
                   className={`w-7 h-7 rounded-lg border flex items-center justify-center transition-colors disabled:opacity-30 ${
                     isDark ? 'border-neutral-700 bg-neutral-800 text-slate-200 hover:bg-neutral-700' : 'border-neutral-300 bg-white text-neutral-800 hover:bg-neutral-100'
@@ -304,6 +300,7 @@ export const CustomRhythmModal: React.FC<CustomRhythmModalProps> = ({
                 <button
                   type="button"
                   onClick={() => handleStep(setHoldIn, -0.5, 0.0, 30.0)}
+                  aria-label="减少吸气屏息时长"
                   disabled={holdIn <= 0.0}
                   className={`w-7 h-7 rounded-lg border flex items-center justify-center transition-colors disabled:opacity-30 ${
                     isDark ? 'border-neutral-700 bg-neutral-800 text-slate-200 hover:bg-neutral-700' : 'border-neutral-300 bg-white text-neutral-800 hover:bg-neutral-100'
@@ -317,6 +314,7 @@ export const CustomRhythmModal: React.FC<CustomRhythmModalProps> = ({
                 <button
                   type="button"
                   onClick={() => handleStep(setHoldIn, 0.5, 0.0, 30.0)}
+                  aria-label="增加吸气屏息时长"
                   disabled={holdIn >= 30.0}
                   className={`w-7 h-7 rounded-lg border flex items-center justify-center transition-colors disabled:opacity-30 ${
                     isDark ? 'border-neutral-700 bg-neutral-800 text-slate-200 hover:bg-neutral-700' : 'border-neutral-300 bg-white text-neutral-800 hover:bg-neutral-100'
@@ -339,6 +337,7 @@ export const CustomRhythmModal: React.FC<CustomRhythmModalProps> = ({
                 <button
                   type="button"
                   onClick={() => handleStep(setExhale, -0.5, 0.5, 30.0)}
+                  aria-label="减少呼气时长"
                   disabled={exhale <= 0.5}
                   className={`w-7 h-7 rounded-lg border flex items-center justify-center transition-colors disabled:opacity-30 ${
                     isDark ? 'border-neutral-700 bg-neutral-800 text-slate-200 hover:bg-neutral-700' : 'border-neutral-300 bg-white text-neutral-800 hover:bg-neutral-100'
@@ -352,6 +351,7 @@ export const CustomRhythmModal: React.FC<CustomRhythmModalProps> = ({
                 <button
                   type="button"
                   onClick={() => handleStep(setExhale, 0.5, 0.5, 30.0)}
+                  aria-label="增加呼气时长"
                   disabled={exhale >= 30.0}
                   className={`w-7 h-7 rounded-lg border flex items-center justify-center transition-colors disabled:opacity-30 ${
                     isDark ? 'border-neutral-700 bg-neutral-800 text-slate-200 hover:bg-neutral-700' : 'border-neutral-300 bg-white text-neutral-800 hover:bg-neutral-100'
@@ -374,6 +374,7 @@ export const CustomRhythmModal: React.FC<CustomRhythmModalProps> = ({
                 <button
                   type="button"
                   onClick={() => handleStep(setHoldOut, -0.5, 0.0, 30.0)}
+                  aria-label="减少呼气屏息时长"
                   disabled={holdOut <= 0.0}
                   className={`w-7 h-7 rounded-lg border flex items-center justify-center transition-colors disabled:opacity-30 ${
                     isDark ? 'border-neutral-700 bg-neutral-800 text-slate-200 hover:bg-neutral-700' : 'border-neutral-300 bg-white text-neutral-800 hover:bg-neutral-100'
@@ -387,6 +388,7 @@ export const CustomRhythmModal: React.FC<CustomRhythmModalProps> = ({
                 <button
                   type="button"
                   onClick={() => handleStep(setHoldOut, 0.5, 0.0, 30.0)}
+                  aria-label="增加呼气屏息时长"
                   disabled={holdOut >= 30.0}
                   className={`w-7 h-7 rounded-lg border flex items-center justify-center transition-colors disabled:opacity-30 ${
                     isDark ? 'border-neutral-700 bg-neutral-800 text-slate-200 hover:bg-neutral-700' : 'border-neutral-300 bg-white text-neutral-800 hover:bg-neutral-100'
@@ -402,13 +404,13 @@ export const CustomRhythmModal: React.FC<CustomRhythmModalProps> = ({
           <div className={`p-3 rounded-xl border relative overflow-hidden ${
             isDark ? 'bg-neutral-950 border-neutral-800' : 'bg-neutral-50 border-neutral-200'
           }`}>
-            <div className="flex items-center justify-between mb-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
               <span className={`text-[10px] font-mono uppercase tracking-wider ${
                 isDark ? 'text-slate-400' : 'text-neutral-500'
               }`}>
-                动态呼吸流形预览 · CURVE PREVIEW
+                周期预览
               </span>
-              <div className="flex items-center gap-3 text-[10px] font-mono">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-mono">
                 <span className="flex items-center gap-1 text-sky-400">
                   <span className="w-1.5 h-1.5 rounded-full bg-sky-400" />
                   吸 {inhale}s
@@ -513,6 +515,7 @@ export const CustomRhythmModal: React.FC<CustomRhythmModalProps> = ({
           </div>
 
           {/* Footer Actions */}
+          {saveError && <p role="alert" className="text-xs text-rose-500">{saveError}</p>}
           <div className={`flex items-center justify-end gap-2.5 pt-3 border-t ${
             isDark ? 'border-neutral-800/80' : 'border-neutral-200'
           }`}>
@@ -532,7 +535,7 @@ export const CustomRhythmModal: React.FC<CustomRhythmModalProps> = ({
               className="px-4 py-1.5 rounded-lg bg-sky-500 hover:bg-sky-400 active:bg-sky-600 text-neutral-950 text-xs font-semibold shadow-md shadow-sky-500/20 flex items-center gap-1.5 transition-all"
             >
               <Check size={14} strokeWidth={2.2} />
-              {initialRhythm ? '保存并应用修改' : '保存并应用节律'}
+              {initialRhythm ? '保存并应用' : '保存并应用'}
             </button>
           </div>
         </form>

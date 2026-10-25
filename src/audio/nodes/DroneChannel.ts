@@ -9,6 +9,7 @@
  */
 
 import { ChannelStripParams, AudioSourceNode } from '../../types/audio';
+import { sanitizeParameterPatch } from '../dsp/parameterSafety';
 
 export class DroneChannel implements AudioSourceNode {
   public readonly id = 'drone';
@@ -104,31 +105,23 @@ export class DroneChannel implements AudioSourceNode {
 
   setParams(params: Partial<ChannelStripParams['drone']>): void {
     if (this.isDisposed) return;
+    params = sanitizeParameterPatch(params);
     const now = this.ctx.currentTime;
 
     if (params.baseFreq !== undefined) {
       this.currentParams.baseFreq = Math.max(20, Math.min(440, params.baseFreq));
       this.droneOsc.frequency.setTargetAtTime(this.currentParams.baseFreq, now, 0.01);
-      if ((this.ctx as any)?.advanceTime) {
-        (this.droneOsc.frequency as any)._value = this.currentParams.baseFreq;
-      }
     }
 
     if (params.pitchDrift !== undefined) {
       this.currentParams.pitchDrift = Math.max(0, Math.min(1, params.pitchDrift));
       const targetCents = this.currentParams.pitchDrift * 4.0;
       this.lfoGain.gain.setTargetAtTime(targetCents, now, 0.01);
-      if ((this.ctx as any)?.advanceTime) {
-        (this.lfoGain.gain as any)._value = targetCents;
-      }
     }
 
     if (params.gain !== undefined) {
       this.currentParams.gain = Math.max(0, Math.min(1, params.gain));
       this.trackGain.gain.setTargetAtTime(this.currentParams.gain, now, 0.01);
-      if ((this.ctx as any)?.advanceTime) {
-        (this.trackGain.gain as any)._value = this.currentParams.gain;
-      }
     }
 
     if (params.bypass !== undefined && params.bypass !== this.currentParams.bypass) {
@@ -155,8 +148,8 @@ export class DroneChannel implements AudioSourceNode {
 
   dispose(): void {
     if (this.isDisposed) return;
-    this.isDisposed = true;
     this.stop(0);
+    this.isDisposed = true;
     this.disconnect();
     this.droneOsc.disconnect();
     this.lfoOsc.disconnect();

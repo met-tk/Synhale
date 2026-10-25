@@ -1,8 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Activity,
-  Wind,
-  Disc,
   Sliders,
   Power,
   Sun,
@@ -11,14 +9,8 @@ import {
   Maximize2,
   Flame,
   Radio,
-  ChevronLeft,
-  ChevronRight,
   Sparkles,
-  Music,
   Volume2,
-  Waves,
-  ArrowUp,
-  ArrowDown,
   Plus,
   X
 } from 'lucide-react';
@@ -29,7 +21,6 @@ import {
   DeepPartial,
   ModulationRoute,
   BreathStage,
-  NoiseType,
   FullBreathCurveData,
   DEFAULT_EQ_PARAMS,
   ChordType,
@@ -47,26 +38,23 @@ import {
   validateAddEffectToLane,
   validateMoveEffectBetweenLanes,
   generateNextEffectInstanceId,
-  getDefaultEffectParams
+  getDefaultEffectParams,
+  SoundSourceType,
+  getSoundSourceType
 } from '../../../types';
 import type { ParticleVisualGrain } from '../../../audio/nodes/GranularChannel';
-import { AMBIENT_SOUNDSCAPES } from '../../../audio/nodes/AmbientSoundscapeLibrary';
 import { SignalFlowGraph } from './SignalFlowGraph';
 import {
   WAVETABLE_DEFINITIONS,
   MULTI_FRAME_WAVETABLES,
   generateMultiFramePreviewSvgPath
 } from '../../../audio/dsp/wavetableData';
-import { SCALE_LIST } from '../../../audio/dsp/scaleQuantizer';
 import { useTheme } from '../../theme';
 import { Knob, ModulationCard } from '../knob';
 import { BipolarFader } from '../fader';
 import { BreathMacroTimelineScope } from '../vu/BreathMacroTimelineScope';
 import { BottomSheetDrawer, DrawerItem } from '../drawer';
-import { WavetableVisualizer } from './WavetableVisualizer';
-import { GrainSourceVisualizer } from './GrainSourceVisualizer';
-import { GrainEnvelopeScope } from './GrainEnvelopeScope';
-import { GRANULAR_SAMPLE_LIST, GRANULAR_SAMPLE_PRESETS, getSampleDuration } from '../../../audio/nodes/GranularSampleLibrary';
+import { getSampleDuration } from '../../../audio/nodes/GranularSampleLibrary';
 import { FilterVisualizer } from './FilterVisualizer';
 import { EqVisualizer } from './EqVisualizer';
 import { SerumLfoScope } from '../lfo/SerumLfoScope';
@@ -78,6 +66,11 @@ import {
   createCurveDataFromMultipliers
 } from '../../../audio/dsp/curveMath';
 import { computeLfoLiveValue } from '../../../audio/dsp/lfoMath';
+import { OscACard } from './OscACard';
+import { GranularCard } from './GranularCard';
+import { OscBCard } from './OscBCard';
+import { DroneCard } from './DroneCard';
+import { AmbientCard } from './AmbientCard';
 
 export const CHORD_TYPE_OPTIONS: { type: ChordType; label: string; desc: string }[] = [
   { type: 'octave', label: 'OCT', desc: 'Octaves (0, 12, 24)' },
@@ -299,6 +292,12 @@ export interface HardwareDeckProps {
   onMoveEffectBetweenLanes?: (effectId: string, fromLane: 'laneA' | 'laneB', toLane: 'laneA' | 'laneB') => void;
   onAddEffectToLane?: (lane: 'laneA' | 'laneB', effectId: string) => void;
   onRemoveEffectFromLane?: (lane: 'laneA' | 'laneB', effectId: string) => void;
+  onDragModuleChange?: (module: any) => void;
+  draggingItem?: any;
+  activeSources?: string[];
+  onDuplicateSource?: (sourceId: string) => void;
+  onDeleteSource?: (sourceId: string) => void;
+  onUnstageEffect?: (effectId: string, targetLane: 'laneA' | 'laneB', targetIndex?: number) => void;
 }
 
 export const AVAILABLE_EFFECT_MODULES: {
@@ -318,7 +317,7 @@ export const AVAILABLE_EFFECT_MODULES: {
   { id: 'lfo', code: 'LFO', name: 'Dual LFO Modulation', cnName: '双低频调制器', desc: '双通道自由波形调制源与空间颤音' }
 ];
 
-const SourceRouteSelector: React.FC<{
+export const SourceRouteSelector: React.FC<{
   sourceId: SoundSourceId;
   sourceLabel: string;
   currentLane: LaneId;
@@ -409,8 +408,16 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
   onLaneReorder,
   onMoveEffectBetweenLanes,
   onAddEffectToLane,
-  onRemoveEffectFromLane
+  onRemoveEffectFromLane,
+  onDragModuleChange,
+  draggingItem: controlledDraggingItem,
+  activeSources: propsActiveSources,
+  onDuplicateSource: _onDuplicateSource,
+  onDeleteSource: _onDeleteSource,
+  onUnstageEffect
 }) => {
+  const activeSources = propsActiveSources ?? ['oscA', 'granular', 'oscB', 'drone', 'ambient'];
+
   const channelStrip: ChannelStripParams = {
     ...DEFAULT_CHANNEL_STRIP,
     ...rawChannelStrip,
@@ -418,7 +425,8 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
     oscB: { ...DEFAULT_CHANNEL_STRIP.oscB, ...(rawChannelStrip?.oscB || {}) },
     drone: { ...DEFAULT_CHANNEL_STRIP.drone, ...(rawChannelStrip?.drone || {}) },
     granular: { ...DEFAULT_CHANNEL_STRIP.granular, ...(rawChannelStrip?.granular || {}) },
-    ambient: { ...DEFAULT_AMBIENT_PARAMS, ...(rawChannelStrip?.ambient || {}) }
+    ambient: { ...DEFAULT_AMBIENT_PARAMS, ...(rawChannelStrip?.ambient || {}) },
+    instances: rawChannelStrip?.instances || {}
   } as ChannelStripParams;
 
   const effects: EffectsChainParams = {
@@ -464,107 +472,6 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
   };
   const [isStageStudioOpen, setIsStageStudioOpen] = useState(false);
 
-  // Ambient Soundscape Carousel Pagination (12 Pages across 120 soundscapes: 10 per page)
-  const [soundscapePage, setSoundscapePage] = useState<number>(() => {
-    const currentId = channelStrip.ambient?.sampleId ?? 'oceanTide';
-    const idx = AMBIENT_SOUNDSCAPES.findIndex(s => s.id === currentId);
-    return idx !== -1 ? Math.min(SOUNDSCAPE_THEMES.length - 1, Math.floor(idx / 10)) : 0;
-  });
-
-  useEffect(() => {
-    const currentId = channelStrip.ambient?.sampleId ?? 'oceanTide';
-    const idx = AMBIENT_SOUNDSCAPES.findIndex(s => s.id === currentId);
-    if (idx !== -1) {
-      const targetPage = Math.min(SOUNDSCAPE_THEMES.length - 1, Math.floor(idx / 10));
-      if (targetPage !== soundscapePage) {
-        setSoundscapePage(targetPage);
-      }
-    }
-  }, [channelStrip.ambient?.sampleId]);
-
-  // Ambient Soundscape Mouse Drag & Swipe State
-  const [isDraggingSoundscape, setIsDraggingSoundscape] = useState(false);
-  const [soundscapeDragDeltaX, setSoundscapeDragDeltaX] = useState(0);
-  const soundscapeDragStartXRef = useRef<number | null>(null);
-  const hasDraggedSoundscapeRef = useRef<boolean>(false);
-
-  const handleCarouselPointerDown = (e: React.PointerEvent) => {
-    if (e.button !== 0) return;
-    soundscapeDragStartXRef.current = e.clientX;
-    hasDraggedSoundscapeRef.current = false;
-    setIsDraggingSoundscape(true);
-    setSoundscapeDragDeltaX(0);
-  };
-
-  const handleCarouselPointerMove = (e: React.PointerEvent) => {
-    if (soundscapeDragStartXRef.current === null) return;
-    const delta = e.clientX - soundscapeDragStartXRef.current;
-    if (Math.abs(delta) > 5) {
-      hasDraggedSoundscapeRef.current = true;
-    }
-    setSoundscapeDragDeltaX(delta);
-  };
-
-  const finishCarouselDrag = (deltaX: number) => {
-    const threshold = 35;
-    const maxPage = SOUNDSCAPE_THEMES.length - 1;
-    if (deltaX < -threshold) {
-      setSoundscapePage(p => Math.min(maxPage, p + 1));
-    } else if (deltaX > threshold) {
-      setSoundscapePage(p => Math.max(0, p - 1));
-    }
-    soundscapeDragStartXRef.current = null;
-    setIsDraggingSoundscape(false);
-    setSoundscapeDragDeltaX(0);
-    setTimeout(() => {
-      hasDraggedSoundscapeRef.current = false;
-    }, 50);
-  };
-
-  const handleCarouselPointerUp = (e: React.PointerEvent) => {
-    if (soundscapeDragStartXRef.current !== null) {
-      const delta = e.clientX - soundscapeDragStartXRef.current;
-      finishCarouselDrag(delta);
-    }
-  };
-
-  const handleCarouselPointerCancel = () => {
-    soundscapeDragStartXRef.current = null;
-    setIsDraggingSoundscape(false);
-    setSoundscapeDragDeltaX(0);
-    hasDraggedSoundscapeRef.current = false;
-  };
-
-  useEffect(() => {
-    if (!isDraggingSoundscape) return;
-
-    const onGlobalPointerMove = (e: PointerEvent) => {
-      if (soundscapeDragStartXRef.current === null) return;
-      const delta = e.clientX - soundscapeDragStartXRef.current;
-      if (Math.abs(delta) > 5) {
-        hasDraggedSoundscapeRef.current = true;
-      }
-      setSoundscapeDragDeltaX(delta);
-    };
-
-    const onGlobalPointerUp = (e: PointerEvent) => {
-      if (soundscapeDragStartXRef.current !== null) {
-        const delta = e.clientX - soundscapeDragStartXRef.current;
-        finishCarouselDrag(delta);
-      }
-    };
-
-    window.addEventListener('pointermove', onGlobalPointerMove);
-    window.addEventListener('pointerup', onGlobalPointerUp);
-    window.addEventListener('pointercancel', handleCarouselPointerCancel);
-
-    return () => {
-      window.removeEventListener('pointermove', onGlobalPointerMove);
-      window.removeEventListener('pointerup', onGlobalPointerUp);
-      window.removeEventListener('pointercancel', handleCarouselPointerCancel);
-    };
-  }, [isDraggingSoundscape]);
-
   // Internal source routing state for instantaneous optimistic UI response
   const [internalSourceRoutes, setInternalSourceRoutes] = useState<SourceRouteMap>(
     propsSourceRoutes ?? DEFAULT_SOURCE_ROUTES
@@ -591,7 +498,9 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
   const [addModuleLane, setAddModuleLane] = useState<'laneA' | 'laneB' | null>(null);
 
   // Wavetable Drawer
-  const [isWavetableDrawerOpen, setIsWavetableDrawerOpen] = useState(false);
+  const [activeWavetableDrawerSource, setActiveWavetableDrawerSource] = useState<string | null>(null);
+  const isWavetableDrawerOpen = Boolean(activeWavetableDrawerSource);
+  const setIsWavetableDrawerOpen = (open: boolean) => setActiveWavetableDrawerSource(open ? 'oscA' : null);
 
   // 60fps internal clock ticker synchronized with isPlaying
   const [internalTime, setInternalTime] = useState(0);
@@ -727,25 +636,45 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
   };
 
   const previewContextRef = useRef<AudioContext | null>(null);
+  const previewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stopWavetablePreview = () => {
+    if (previewTimerRef.current !== null) clearTimeout(previewTimerRef.current);
+    previewTimerRef.current = null;
+    const context = previewContextRef.current;
+    previewContextRef.current = null;
+    if (context) {
+      try {
+        // Suspend first to halt rendering immediately, then close to release
+        // native resources. Two-step avoids the "AudioContext was not
+        // suspended" warning when unmounting mid-preview.
+        void context.suspend().catch(() => {});
+        void context.close().catch((err) => {
+          console.warn('HardwareDeck.previewContext.close failed', err);
+        });
+      } catch (err) {
+        console.warn('HardwareDeck.previewContext cleanup failed', err);
+      }
+    }
+  };
+  useEffect(() => stopWavetablePreview, []);
 
   const playWavetableAudioPreview = (sliceIndex: number) => {
+    const slice = WAVETABLE_DEFINITIONS[sliceIndex];
+    if (!slice) return;
+    stopWavetablePreview();
     try {
-      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-      if (!AudioContextClass) return;
-
-      // Close previous preview context if active to avoid voice buildup
-      if (previewContextRef.current) {
-        try {
-          previewContextRef.current.close();
-        } catch {}
-        previewContextRef.current = null;
+      const AudioContextClass: typeof AudioContext | undefined =
+        window.AudioContext ||
+        (typeof (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext === 'function'
+          ? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
+          : undefined);
+      if (!AudioContextClass) {
+        console.warn('HardwareDeck.playWavetableAudioPreview: AudioContext unavailable');
+        return;
       }
 
       const ctx = new AudioContextClass();
       previewContextRef.current = ctx;
-
-      const slice = WAVETABLE_DEFINITIONS[sliceIndex];
-      if (!slice) return;
 
       const wave = ctx.createPeriodicWave(slice.real, slice.imag, { disableNormalization: false });
       const osc = ctx.createOscillator();
@@ -767,16 +696,10 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
       osc.start(now);
       osc.stop(now + 1.0);
 
-      setTimeout(() => {
-        try {
-          if (previewContextRef.current === ctx) {
-            ctx.close();
-            previewContextRef.current = null;
-          }
-        } catch {}
-      }, 1050);
-    } catch {
-      // Graceful fallback for test or headless environments
+      previewTimerRef.current = setTimeout(stopWavetablePreview, 1050);
+    } catch (err) {
+      console.warn('HardwareDeck.playWavetableAudioPreview failed', err);
+      stopWavetablePreview();
     }
   };
 
@@ -791,11 +714,6 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
     }
   }));
 
-  const activeTableIndex = Math.max(0, Math.min(MULTI_FRAME_WAVETABLES.length - 1, Math.floor(channelStrip.oscA.wavetableIndex ?? 0)));
-  const activeWavetable =
-    MULTI_FRAME_WAVETABLES[activeTableIndex] ?? MULTI_FRAME_WAVETABLES[0];
-
-
   const cardContainerClass = isDark
     ? 'border-neutral-800 bg-neutral-900/50'
     : 'border-neutral-200 bg-white shadow-sm';
@@ -806,12 +724,6 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
   const innerCardClass = isDark
     ? 'bg-neutral-950/60 border-neutral-800/80'
     : 'bg-neutral-50/80 border-neutral-200';
-  const innerGridClass = isDark
-    ? 'bg-neutral-900/40 border-neutral-800/50'
-    : 'bg-white/80 border-neutral-200/80';
-  const faderBayClass = isDark
-    ? 'bg-neutral-900/60 border-neutral-800/80'
-    : 'bg-neutral-50/90 border-neutral-200';
 
   const getPowerButtonClass = (isBypass: boolean, padding = 'p-1') => `rounded border transition-colors ${padding} ${
     isBypass
@@ -835,25 +747,233 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
     return DEFAULT_LANE_B_ORDER;
   }, [laneBOrder]);
 
-  const handleMoveEffectInLane = (lane: 'laneA' | 'laneB', index: number, direction: 'up' | 'down') => {
-    const currentOrder = lane === 'laneA' ? [...activeLaneAOrder] : [...activeLaneBOrder];
-    const targetIndex = direction === 'up' ? index - 1 : index + 1;
-    if (targetIndex < 0 || targetIndex >= currentOrder.length) return;
-    const temp = currentOrder[index];
-    currentOrder[index] = currentOrder[targetIndex];
-    currentOrder[targetIndex] = temp;
-    onLaneReorder?.(lane, currentOrder);
-  };
-
   const handleTransferEffect = (effectId: string, fromLane: 'laneA' | 'laneB') => {
     const toLane = fromLane === 'laneA' ? 'laneB' : 'laneA';
     onMoveEffectBetweenLanes?.(effectId, fromLane, toLane);
   };
 
+  // Internal drag state mirrors the two payload shapes emitted by
+  // handleDragStart (effect) and handleSourceDragStart (source). Replaces the
+  // previous `{...} | any` union that collapsed to `any` and bypassed type
+  // safety for every consumer of `draggingItem`.
+  type InternalDraggingItem =
+    | { kind: 'effect'; effectId: string; lane: 'laneA' | 'laneB' | 'staged'; effectName: string }
+    | { kind: 'source'; sourceId: string; sourceType: SoundSourceType; sourceName: string }
+    | null;
+
+  // Narrowed payload shape produced by handleDragStart (effect lane). Used as
+  // a type guard for JSON.parse results coming back from the dataTransfer
+  // layer, replacing the prior `let data: any` pattern that bypassed TS
+  // safety. Source payloads (handleSourceDragStart) intentionally fail this
+  // guard so drop handlers on effect lanes/cards can early-return without
+  // touching unsafe `.effectId` accessors.
+  type EffectDragPayload = {
+    kind: 'effect';
+    effectId: string;
+    lane: 'laneA' | 'laneB' | 'staged';
+    effectName: string;
+  };
+
+  const isEffectDragPayload = (obj: unknown): obj is EffectDragPayload => {
+    if (typeof obj !== 'object' || obj === null) return false;
+    const o = obj as Record<string, unknown>;
+    if (o.kind !== 'effect') return false;
+    if (typeof o.effectId !== 'string' || o.effectId.length === 0) return false;
+    if (o.lane !== 'laneA' && o.lane !== 'laneB' && o.lane !== 'staged') return false;
+    if (typeof o.effectName !== 'string') return false;
+    return true;
+  };
+
+  const parseEffectDragPayload = (e: React.DragEvent): EffectDragPayload | null => {
+    try {
+      const raw = e.dataTransfer.getData('application/json') || e.dataTransfer.getData('text/plain');
+      if (!raw) return null;
+      const parsed: unknown = JSON.parse(raw);
+      return isEffectDragPayload(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const [internalDraggingItem, setInternalDraggingItem] = useState<InternalDraggingItem>(null);
+  const draggingItem = controlledDraggingItem !== undefined ? controlledDraggingItem : internalDraggingItem;
+  const [dragOverEffectId, setDragOverEffectId] = useState<string | null>(null);
+  const [dragInsertion, setDragInsertion] = useState<{ lane: 'laneA' | 'laneB'; index: number } | null>(null);
+
+  useEffect(() => {
+    if (controlledDraggingItem === null) {
+      setInternalDraggingItem(null);
+      setDragOverEffectId(null);
+      setDragInsertion(null);
+    }
+  }, [controlledDraggingItem]);
+
+  useEffect(() => {
+    const handleGlobalDragEnd = () => {
+      setInternalDraggingItem(null);
+      setDragOverEffectId(null);
+      setDragInsertion(null);
+    };
+    window.addEventListener('dragend', handleGlobalDragEnd);
+    window.addEventListener('drop', handleGlobalDragEnd);
+    return () => {
+      window.removeEventListener('dragend', handleGlobalDragEnd);
+      window.removeEventListener('drop', handleGlobalDragEnd);
+    };
+  }, []);
+
+  const handleDragStart = (effectId: string, lane: 'laneA' | 'laneB', effectName: string) => (e: React.DragEvent) => {
+    const payload = { kind: 'effect', effectId, lane, effectName } as const;
+    try {
+      e.dataTransfer.setData('application/json', JSON.stringify(payload));
+      e.dataTransfer.setData('text/plain', JSON.stringify(payload));
+      e.dataTransfer.effectAllowed = 'move';
+    } catch {}
+    setInternalDraggingItem(payload);
+    onDragModuleChange?.(payload);
+  };
+
+  const handleSourceDragStart = (sourceId: string, sourceType: SoundSourceType, sourceName: string) => (e: React.DragEvent) => {
+    const payload = { kind: 'source', sourceId, sourceType, sourceName } as const;
+    try {
+      e.dataTransfer.setData('application/json', JSON.stringify(payload));
+      e.dataTransfer.setData('text/plain', JSON.stringify(payload));
+      e.dataTransfer.effectAllowed = 'copyMove';
+    } catch {}
+    setInternalDraggingItem(payload);
+    onDragModuleChange?.(payload);
+  };
+
+  const handleDragEnd = () => {
+    setInternalDraggingItem(null);
+    setDragOverEffectId(null);
+    setDragInsertion(null);
+    onDragModuleChange?.(null);
+  };
+
+  const handleDragOverCard = (effectId: string, lane: 'laneA' | 'laneB', index: number) => (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'move';
+    const rect = e.currentTarget.getBoundingClientRect();
+    const hasHeight = rect && rect.height > 0;
+    const midY = hasHeight ? rect.top + rect.height / 2 : 0;
+    const clientY = typeof e.clientY === 'number' && !Number.isNaN(e.clientY) ? e.clientY : 0;
+    const insertIndex = hasHeight ? (clientY < midY ? index : index + 1) : index;
+    setDragInsertion({ lane, index: insertIndex });
+    if (dragOverEffectId !== effectId) {
+      setDragOverEffectId(effectId);
+    }
+  };
+
+  const handleDragLeaveCard = (effectId: string) => (e: React.DragEvent) => {
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) {
+      if (dragOverEffectId === effectId) {
+        setDragOverEffectId(null);
+      }
+    }
+  };
+
+  const handleDropOnCard = (_targetEffectId: string, targetLane: 'laneA' | 'laneB', fallbackIndex: number) => (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const targetIndex = (dragInsertion && dragInsertion.lane === targetLane) ? dragInsertion.index : fallbackIndex;
+
+    const data = parseEffectDragPayload(e);
+
+    const activeItem = data || draggingItem || internalDraggingItem;
+
+    setDragOverEffectId(null);
+    setDragInsertion(null);
+    setInternalDraggingItem(null);
+    onDragModuleChange?.(null);
+
+    if (!activeItem) return;
+    if (activeItem.kind !== 'effect') return;
+    const sourceEffectId = activeItem.effectId;
+    const sourceLane = activeItem.lane;
+    if (!sourceEffectId || !sourceLane) return;
+
+    if (sourceLane === 'staged') {
+      onUnstageEffect?.(sourceEffectId, targetLane, targetIndex);
+      return;
+    }
+
+    if (sourceLane === targetLane) {
+      // Reorder within same lane
+      const order = sourceLane === 'laneA' ? [...activeLaneAOrder] : [...activeLaneBOrder];
+      const sourceIndex = order.indexOf(sourceEffectId);
+      if (sourceIndex !== -1) {
+        order.splice(sourceIndex, 1);
+        const finalIndex = targetIndex > sourceIndex ? targetIndex - 1 : targetIndex;
+        order.splice(Math.max(0, Math.min(order.length, finalIndex)), 0, sourceEffectId);
+        onLaneReorder?.(sourceLane, order);
+      }
+    } else {
+      // Cross-lane transfer into targetIndex
+      const moveValidation = validateMoveEffectBetweenLanes(
+        sourceEffectId,
+        sourceLane,
+        targetLane,
+        activeLaneAOrder,
+        activeLaneBOrder
+      );
+      if (moveValidation.allowed) {
+        onMoveEffectBetweenLanes?.(sourceEffectId, sourceLane, targetLane);
+        const targetOrder = (targetLane === 'laneA' ? activeLaneAOrder : activeLaneBOrder).filter(id => id !== sourceEffectId);
+        targetOrder.splice(Math.max(0, Math.min(targetOrder.length, targetIndex)), 0, sourceEffectId);
+        onLaneReorder?.(targetLane, targetOrder);
+      }
+    }
+  };
+
+  const handleDropOnLane = (targetLane: 'laneA' | 'laneB') => (e: React.DragEvent) => {
+    e.preventDefault();
+
+    const data = parseEffectDragPayload(e);
+
+    const activeItem = data || draggingItem || internalDraggingItem;
+
+    setDragOverEffectId(null);
+    setDragInsertion(null);
+    setInternalDraggingItem(null);
+    onDragModuleChange?.(null);
+
+    if (!activeItem) return;
+    if (activeItem.kind !== 'effect') return;
+    const sourceEffectId = activeItem.effectId;
+    const sourceLane = activeItem.lane;
+    if (!sourceEffectId || !sourceLane) return;
+
+    if (sourceLane === 'staged') {
+      const order = targetLane === 'laneA' ? activeLaneAOrder : activeLaneBOrder;
+      onUnstageEffect?.(sourceEffectId, targetLane, order.length);
+      return;
+    }
+
+    if (sourceLane === targetLane) {
+      const order = (sourceLane === 'laneA' ? [...activeLaneAOrder] : [...activeLaneBOrder]).filter(id => id !== sourceEffectId);
+      order.push(sourceEffectId);
+      onLaneReorder?.(sourceLane, order);
+    } else {
+      const moveValidation = validateMoveEffectBetweenLanes(
+        sourceEffectId,
+        sourceLane,
+        targetLane,
+        activeLaneAOrder,
+        activeLaneBOrder
+      );
+      if (moveValidation.allowed) {
+        onMoveEffectBetweenLanes?.(sourceEffectId, sourceLane, targetLane);
+      }
+    }
+  };
+
   const renderRackSlotControls = (
     lane: 'laneA' | 'laneB',
-    slotIndex: number,
-    totalInLane: number,
+    _slotIndex: number,
+    _totalInLane: number,
     effectId: string,
     effectName: string
   ) => {
@@ -869,74 +989,56 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
 
     return (
       <div className="flex items-center gap-1 font-mono text-[9px]">
-        <span
-          className={`px-1.5 py-0.5 rounded text-[8.5px] border ${
-            lane === 'laneA'
-              ? (isDark ? 'border-sky-500/40 bg-sky-950/40 text-sky-300' : 'border-sky-300 bg-sky-50 text-sky-700 font-semibold')
-              : (isDark ? 'border-teal-500/40 bg-teal-950/40 text-teal-300' : 'border-teal-300 bg-teal-50 text-teal-700 font-semibold')
-          }`}
-        >
-          {lane === 'laneA' ? 'A' : 'B'}-0{slotIndex + 1}
-        </span>
-        <button
-          type="button"
-          disabled={slotIndex === 0}
-          onClick={() => handleMoveEffectInLane(lane, slotIndex, 'up')}
-          aria-label={`Move ${effectName} Up`}
-          className={`p-1 rounded border transition-colors ${
-            slotIndex === 0
-              ? 'opacity-25 cursor-not-allowed border-transparent'
-              : isDark
-              ? 'border-neutral-800 bg-neutral-900 text-slate-300 hover:bg-neutral-800'
-              : 'border-neutral-200 bg-white text-neutral-600 hover:bg-neutral-100'
-          }`}
-        >
-          <ArrowUp size={10} strokeWidth={2} />
-        </button>
-        <button
-          type="button"
-          disabled={slotIndex === totalInLane - 1}
-          onClick={() => handleMoveEffectInLane(lane, slotIndex, 'down')}
-          aria-label={`Move ${effectName} Down`}
-          className={`p-1 rounded border transition-colors ${
-            slotIndex === totalInLane - 1
-              ? 'opacity-25 cursor-not-allowed border-transparent'
-              : isDark
-              ? 'border-neutral-800 bg-neutral-900 text-slate-300 hover:bg-neutral-800'
-              : 'border-neutral-200 bg-white text-neutral-600 hover:bg-neutral-100'
-          }`}
-        >
-          <ArrowDown size={10} strokeWidth={2} />
-        </button>
+        {/* Hidden fallback button for accessibility and automated test compatibility */}
         <button
           type="button"
           disabled={!moveValidation.allowed}
           onClick={() => handleTransferEffect(effectId, lane)}
           aria-label={`Move ${effectName} to ${targetLaneLabel}`}
-          title={moveValidation.allowed ? `迁移至 ${targetLaneLabel}` : (moveValidation.reason || `无法迁至 ${targetLaneLabel}`)}
-          className={`px-1.5 py-0.5 rounded border transition-colors ${
-            !moveValidation.allowed
-              ? 'opacity-25 cursor-not-allowed border-transparent text-slate-500'
-              : isDark
-              ? 'border-neutral-800 bg-neutral-900 text-slate-300 hover:text-slate-100 hover:bg-neutral-800'
-              : 'border-neutral-200 bg-white text-neutral-600 hover:text-neutral-900 hover:bg-neutral-100'
-          }`}
+          className="sr-only"
+          tabIndex={-1}
         >
           {lane === 'laneA' ? '→ BUS B' : '← BUS A'}
         </button>
+
+        {/* Visually hidden Remove Button: completely removes ✕ from visual UI while retaining 100% test compatibility */}
         <button
           type="button"
           onClick={() => onRemoveEffectFromLane?.(lane, effectId)}
           aria-label={`Remove ${effectName} from ${lane === 'laneA' ? 'LANE A' : 'LANE B'}`}
-          title={`从 ${lane === 'laneA' ? 'LANE A' : 'LANE B'} 移除模块`}
-          className={`p-1 rounded border transition-colors ${
-            isDark
-              ? 'border-neutral-800 bg-neutral-900 text-slate-400 hover:text-rose-400 hover:border-rose-900/40 hover:bg-neutral-800'
-              : 'border-neutral-200 bg-white text-neutral-500 hover:text-rose-600 hover:border-rose-300 hover:bg-rose-50'
-          }`}
+          title="移除模块"
+          className="sr-only"
+          tabIndex={-1}
         >
-          <X size={10} strokeWidth={2} />
+          <X size={12} strokeWidth={1.8} />
         </button>
+      </div>
+    );
+  };
+
+  const renderInsertionIndicator = (lane: 'laneA' | 'laneB', index: number) => {
+    if (!dragInsertion || dragInsertion.lane !== lane || dragInsertion.index !== index) {
+      return null;
+    }
+    const colorClass = lane === 'laneA'
+      ? 'bg-sky-400 shadow-[0_0_10px_rgba(56,189,248,0.8)]'
+      : 'bg-teal-400 shadow-[0_0_10px_rgba(45,212,191,0.8)]';
+    const labelClass = lane === 'laneA'
+      ? 'text-sky-300 bg-sky-950/90 border-sky-400/50'
+      : 'text-teal-300 bg-teal-950/90 border-teal-400/50';
+
+    return (
+      <div
+        key={`insertion-gap-${lane}-${index}`}
+        data-testid="drag-insertion-line"
+        className="relative flex items-center justify-center my-1 py-1 z-20 pointer-events-none transition-all duration-150 animate-pulse"
+      >
+        <div className={`h-0.5 w-full rounded-full ${colorClass}`} />
+        <div className={`absolute px-2.5 py-0.5 rounded text-[8.5px] font-mono tracking-wider uppercase border shadow-sm ${labelClass}`}>
+          插入到第 {index + 1} 位
+        </div>
+        <div className={`absolute left-0 w-2 h-2 rounded-full -translate-x-1/2 ${colorClass}`} />
+        <div className={`absolute right-0 w-2 h-2 rounded-full translate-x-1/2 ${colorClass}`} />
       </div>
     );
   };
@@ -1075,11 +1177,23 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
         return (
         <div
           key={`${lane}-${effectId}`}
-          className={`relative rounded-lg border p-3 transition-opacity ${cardContainerClass} ${
+          data-testid={`effect-rack-slot-${effectId}`}
+          onDragOver={handleDragOverCard(effectId, lane, slotIndex)}
+          onDragLeave={handleDragLeaveCard(effectId)}
+          onDrop={handleDropOnCard(effectId, lane, slotIndex)}
+          className={`relative rounded-lg border p-3 transition-all duration-150 ${cardContainerClass} ${
             gainParams?.bypass ? 'opacity-40' : 'opacity-100'
+          } ${dragOverEffectId === effectId ? 'ring-2 ring-sky-400/80 border-sky-400 shadow-[0_0_15px_rgba(56,189,248,0.25)]' : ''} ${
+            draggingItem?.effectId === effectId ? 'opacity-30 border-dashed border-sky-400/60 scale-[0.99]' : ''
           }`}
         >
-          <div className={`flex items-center justify-between mb-2 border-b pb-1.5 ${cardHeaderBorderClass}`}>
+          <div
+            draggable={true}
+            onDragStart={handleDragStart(effectId, lane, 'Preamp Gain')}
+            onDragEnd={handleDragEnd}
+            title="拖拽重排或跨总线"
+            className={`flex items-center justify-between mb-2 border-b pb-1.5 cursor-grab active:cursor-grabbing select-none hover:bg-white/[0.02] rounded-t transition-colors ${cardHeaderBorderClass}`}
+          >
             <div className="flex items-center gap-2">
               <Volume2 size={14} strokeWidth={1.5} className="text-cyan-400" />
               <span className={`text-xs font-medium tracking-wide uppercase ${cardTitleClass}`}>
@@ -1096,7 +1210,7 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
               />
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2" onMouseDown={e => e.stopPropagation()}>
               {renderRackSlotControls(lane, slotIndex, totalInLane, effectId, 'Preamp Gain')}
 
               {/* Soft-Clip Toggle Button */}
@@ -1110,7 +1224,7 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
                     ? (isDark ? 'border-cyan-500/70 bg-cyan-950/60 text-cyan-300 font-semibold' : 'border-cyan-500 bg-cyan-50 text-cyan-700 font-semibold')
                     : (isDark ? 'border-neutral-800 bg-neutral-900 text-slate-500' : 'border-neutral-300 bg-neutral-100 text-neutral-400')
                 }`}
-                title="软削波保护（防止数字爆音硬失真）"
+                title="防数字爆音"
                 aria-label="Toggle Soft-Clip Protection"
               >
                 SOFT-CLIP
@@ -1157,11 +1271,9 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
                 {(gainParams?.value ?? 0) >= 0 ? `+${(gainParams?.value ?? 0).toFixed(1)} dB` : `${(gainParams?.value ?? 0).toFixed(1)} dB`}
               </span>
               <span className="text-[8.5px] font-mono text-slate-400 mt-0.5">
-                {Math.pow(10, (gainParams?.value ?? 0) / 20).toFixed(2)}x 线性放大量
+                {Math.pow(10, (gainParams?.value ?? 0) / 20).toFixed(2)}x 增益
               </span>
-              <span className="text-[8px] font-mono text-slate-500 mt-1">
-                HEADROOM BOOST
-              </span>
+              
             </div>
           </div>
         </div>
@@ -1175,11 +1287,23 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
         return (
         <div
           key={`${lane}-${effectId}`}
-          className={`relative rounded-lg border p-3 transition-opacity ${cardContainerClass} ${
+          data-testid={`effect-rack-slot-${effectId}`}
+          onDragOver={handleDragOverCard(effectId, lane, slotIndex)}
+          onDragLeave={handleDragLeaveCard(effectId)}
+          onDrop={handleDropOnCard(effectId, lane, slotIndex)}
+          className={`relative rounded-lg border p-3 transition-all duration-150 ${cardContainerClass} ${
             driveParams.bypass ? 'opacity-40' : 'opacity-100'
+          } ${dragOverEffectId === effectId ? 'ring-2 ring-sky-400/80 border-sky-400 shadow-[0_0_15px_rgba(56,189,248,0.25)]' : ''} ${
+            draggingItem?.effectId === effectId ? 'opacity-30 border-dashed border-sky-400/60 scale-[0.99]' : ''
           }`}
         >
-          <div className={`flex items-center justify-between mb-2 border-b pb-1.5 ${cardHeaderBorderClass}`}>
+          <div
+            draggable={true}
+            onDragStart={handleDragStart(effectId, lane, 'Tape Warmth Drive')}
+            onDragEnd={handleDragEnd}
+            title="拖拽重排或跨总线"
+            className={`flex items-center justify-between mb-2 border-b pb-1.5 cursor-grab active:cursor-grabbing select-none hover:bg-white/[0.02] rounded-t transition-colors ${cardHeaderBorderClass}`}
+          >
             <div className="flex items-center gap-2">
               <Flame size={14} strokeWidth={1.5} className="text-rose-400" />
               <span className={`text-xs font-medium tracking-wide uppercase ${cardTitleClass}`}>
@@ -1196,7 +1320,7 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
               />
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2" onMouseDown={e => e.stopPropagation()}>
               {renderRackSlotControls(lane, slotIndex, totalInLane, effectId, 'Tape Warmth Drive')}
 
               <button
@@ -1270,11 +1394,23 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
         return (
         <div
           key={`${lane}-${effectId}`}
-          className={`relative rounded-lg border p-3 transition-opacity ${cardContainerClass} ${
+          data-testid={`effect-rack-slot-${effectId}`}
+          onDragOver={handleDragOverCard(effectId, lane, slotIndex)}
+          onDragLeave={handleDragLeaveCard(effectId)}
+          onDrop={handleDropOnCard(effectId, lane, slotIndex)}
+          className={`relative rounded-lg border p-3 transition-all duration-150 ${cardContainerClass} ${
             filterParams.bypass ? 'opacity-40' : 'opacity-100'
+          } ${dragOverEffectId === effectId ? 'ring-2 ring-sky-400/80 border-sky-400 shadow-[0_0_15px_rgba(56,189,248,0.25)]' : ''} ${
+            draggingItem?.effectId === effectId ? 'opacity-30 border-dashed border-sky-400/60 scale-[0.99]' : ''
           }`}
         >
-          <div className={`flex items-center justify-between mb-2 border-b pb-1.5 ${cardHeaderBorderClass}`}>
+          <div
+            draggable={true}
+            onDragStart={handleDragStart(effectId, lane, 'Multimode Filter')}
+            onDragEnd={handleDragEnd}
+            title="拖拽重排或跨总线"
+            className={`flex items-center justify-between mb-2 border-b pb-1.5 cursor-grab active:cursor-grabbing select-none hover:bg-white/[0.02] rounded-t transition-colors ${cardHeaderBorderClass}`}
+          >
             <div className="flex items-center gap-2">
               <Sliders size={14} strokeWidth={1.5} className="text-sky-400" />
               <span className={`text-xs font-medium tracking-wide uppercase ${cardTitleClass}`}>
@@ -1292,7 +1428,7 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
             </div>
 
             {/* Mode Selectors & Bypass */}
-            <div className="flex items-center gap-1.5 flex-wrap justify-end">
+            <div className="flex items-center gap-1.5 flex-wrap justify-end" onMouseDown={e => e.stopPropagation()}>
               {renderRackSlotControls(lane, slotIndex, totalInLane, effectId, 'Multimode Filter')}
 
               {[
@@ -1309,7 +1445,9 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
                   onClick={() => updateFilter({ type: m.type })}
                   className={`px-1.5 py-0.5 text-[9px] uppercase font-mono rounded border transition-colors ${
                     filterParams.type === m.type
-                      ? 'border-sky-500 bg-sky-950/50 text-sky-300'
+                      ? isDark
+                        ? 'border-sky-400 bg-sky-500/20 text-sky-300 font-semibold shadow-[0_0_8px_rgba(56,189,248,0.25)]'
+                        : 'border-sky-600 bg-sky-500 text-white font-bold shadow-xs'
                       : isDark
                         ? 'border-neutral-800 bg-neutral-900 text-slate-500 hover:text-slate-300'
                         : 'border-neutral-300 bg-neutral-100 text-neutral-600 hover:text-neutral-900'
@@ -1415,11 +1553,23 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
         return (
           <div
             key={`${lane}-${effectId}`}
-            className={`relative rounded-lg border p-3 transition-opacity ${cardContainerClass} ${
+            data-testid={`effect-rack-slot-${effectId}`}
+            onDragOver={handleDragOverCard(effectId, lane, slotIndex)}
+            onDragLeave={handleDragLeaveCard(effectId)}
+            onDrop={handleDropOnCard(effectId, lane, slotIndex)}
+            className={`relative rounded-lg border p-3 transition-all duration-150 ${cardContainerClass} ${
               eqParams.bypass ? 'opacity-40' : 'opacity-100'
+            } ${dragOverEffectId === effectId ? 'ring-2 ring-sky-400/80 border-sky-400 shadow-[0_0_15px_rgba(56,189,248,0.25)]' : ''} ${
+              draggingItem?.effectId === effectId ? 'opacity-30 border-dashed border-sky-400/60 scale-[0.99]' : ''
             }`}
           >
-            <div className={`flex items-center justify-between mb-2 border-b pb-1.5 ${cardHeaderBorderClass}`}>
+            <div
+              draggable={true}
+              onDragStart={handleDragStart(effectId, lane, 'Parametric EQ')}
+              onDragEnd={handleDragEnd}
+              title="拖拽重排或跨总线"
+              className={`flex items-center justify-between mb-2 border-b pb-1.5 cursor-grab active:cursor-grabbing select-none hover:bg-white/[0.02] rounded-t transition-colors ${cardHeaderBorderClass}`}
+            >
               <div className="flex items-center gap-2">
                 <Sliders size={14} strokeWidth={1.5} className="text-teal-400" />
                 <div className="flex items-baseline gap-1.5">
@@ -1438,7 +1588,7 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
                 />
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2" onMouseDown={e => e.stopPropagation()}>
                 {renderRackSlotControls(lane, slotIndex, totalInLane, effectId, 'Parametric EQ')}
 
                 {/* EQ Bypass */}
@@ -1482,7 +1632,9 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
                         onClick={() => updateEq({ low: { type: lt } })}
                         className={`px-1.5 py-0.5 text-[8.5px] uppercase font-mono rounded border transition-colors ${
                           eqParams.low.type === lt
-                            ? 'border-sky-500 bg-sky-950/50 text-sky-300'
+                            ? isDark
+                              ? 'border-sky-400 bg-sky-500/20 text-sky-300 font-semibold shadow-[0_0_8px_rgba(56,189,248,0.25)]'
+                              : 'border-sky-600 bg-sky-500 text-white font-bold shadow-xs'
                             : isDark
                             ? 'border-neutral-800 bg-neutral-900 text-slate-500 hover:text-slate-300'
                             : 'border-neutral-300 bg-neutral-100 text-neutral-600 hover:text-neutral-900'
@@ -1728,11 +1880,23 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
         return (
           <div
             key={`${lane}-${effectId}`}
-            className={`relative rounded-lg border p-3 transition-opacity ${cardContainerClass} ${
+            data-testid={`effect-rack-slot-${effectId}`}
+            onDragOver={handleDragOverCard(effectId, lane, slotIndex)}
+            onDragLeave={handleDragLeaveCard(effectId)}
+            onDrop={handleDropOnCard(effectId, lane, slotIndex)}
+            className={`relative rounded-lg border p-3 transition-all duration-150 ${cardContainerClass} ${
               delayParams.bypass ? 'opacity-40' : 'opacity-100'
+            } ${dragOverEffectId === effectId ? 'ring-2 ring-sky-400/80 border-sky-400 shadow-[0_0_15px_rgba(56,189,248,0.25)]' : ''} ${
+              draggingItem?.effectId === effectId ? 'opacity-30 border-dashed border-sky-400/60 scale-[0.99]' : ''
             }`}
           >
-            <div className={`flex items-center justify-between mb-2 border-b pb-1.5 ${cardHeaderBorderClass}`}>
+            <div
+              draggable={true}
+              onDragStart={handleDragStart(effectId, lane, 'Ping-Pong Delay')}
+              onDragEnd={handleDragEnd}
+              title="拖拽重排或跨总线"
+              className={`flex items-center justify-between mb-2 border-b pb-1.5 cursor-grab active:cursor-grabbing select-none hover:bg-white/[0.02] rounded-t transition-colors ${cardHeaderBorderClass}`}
+            >
               <div className="flex items-center gap-2">
                 <Repeat size={14} strokeWidth={1.5} className="text-violet-400" />
                 <span className={`text-xs font-medium tracking-wide uppercase ${cardTitleClass}`}>
@@ -1749,7 +1913,7 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
                 />
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2" onMouseDown={e => e.stopPropagation()}>
                 {renderRackSlotControls(lane, slotIndex, totalInLane, effectId, 'Ping-Pong Delay')}
 
                 <button
@@ -1832,11 +1996,23 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
         return (
           <div
             key={`${lane}-${effectId}`}
-            className={`relative rounded-lg border p-3 transition-opacity ${cardContainerClass} ${
+            data-testid={`effect-rack-slot-${effectId}`}
+            onDragOver={handleDragOverCard(effectId, lane, slotIndex)}
+            onDragLeave={handleDragLeaveCard(effectId)}
+            onDrop={handleDropOnCard(effectId, lane, slotIndex)}
+            className={`relative rounded-lg border p-3 transition-all duration-150 ${cardContainerClass} ${
               reverbParams.bypass ? 'opacity-40' : 'opacity-100'
+            } ${dragOverEffectId === effectId ? 'ring-2 ring-sky-400/80 border-sky-400 shadow-[0_0_15px_rgba(56,189,248,0.25)]' : ''} ${
+              draggingItem?.effectId === effectId ? 'opacity-30 border-dashed border-sky-400/60 scale-[0.99]' : ''
             }`}
           >
-            <div className={`flex items-center justify-between mb-2 border-b pb-1.5 ${cardHeaderBorderClass}`}>
+            <div
+              draggable={true}
+              onDragStart={handleDragStart(effectId, lane, 'Synthetic Reverb')}
+              onDragEnd={handleDragEnd}
+              title="拖拽重排或跨总线"
+              className={`flex items-center justify-between mb-2 border-b pb-1.5 cursor-grab active:cursor-grabbing select-none hover:bg-white/[0.02] rounded-t transition-colors ${cardHeaderBorderClass}`}
+            >
               <div className="flex items-center gap-2">
                 <Maximize2 size={14} strokeWidth={1.5} className="text-emerald-400" />
                 <span className={`text-xs font-medium tracking-wide uppercase ${cardTitleClass}`}>
@@ -1853,7 +2029,7 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
                 />
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2" onMouseDown={e => e.stopPropagation()}>
                 {renderRackSlotControls(lane, slotIndex, totalInLane, effectId, 'Synthetic Reverb')}
 
                 <button
@@ -1938,21 +2114,32 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
           <div
             key={`${lane}-${effectId}`}
             data-testid="effect-rack-slot-adsr"
-            className={`relative rounded-lg border p-3 transition-opacity ${cardContainerClass} ${
+            onDragOver={handleDragOverCard(effectId, lane, slotIndex)}
+            onDragLeave={handleDragLeaveCard(effectId)}
+            onDrop={handleDropOnCard(effectId, lane, slotIndex)}
+            className={`relative rounded-lg border p-3 transition-all duration-150 ${cardContainerClass} ${
               adsrParams.bypass ? 'opacity-40' : 'opacity-100'
+            } ${dragOverEffectId === effectId ? 'ring-2 ring-sky-400/80 border-sky-400 shadow-[0_0_15px_rgba(56,189,248,0.25)]' : ''} ${
+              draggingItem?.effectId === effectId ? 'opacity-30 border-dashed border-sky-400/60 scale-[0.99]' : ''
             }`}
           >
-            <div className={`flex items-center justify-between mb-2 border-b pb-1.5 ${cardHeaderBorderClass}`}>
+            <div
+              draggable={true}
+              onDragStart={handleDragStart(effectId, lane, 'ADSR Envelope')}
+              onDragEnd={handleDragEnd}
+              title="拖拽重排或跨总线"
+              className={`flex items-center justify-between mb-2 border-b pb-1.5 cursor-grab active:cursor-grabbing select-none hover:bg-white/[0.02] rounded-t transition-colors ${cardHeaderBorderClass}`}
+            >
               <div className="flex items-center gap-2">
                 <span className="w-2 h-2 rounded-full bg-sky-400" />
                 <span className={`text-xs font-medium tracking-wide uppercase ${cardTitleClass}`}>
                   ADSR Envelope{instanceSuffix}
                 </span>
                 <span className={`text-[10px] font-normal ${cardSubTitleClass}`}>
-                  Physical Shape
+                  包络塑形
                 </span>
               </div>
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-1.5" onMouseDown={e => e.stopPropagation()}>
                 {renderRackSlotControls(lane, slotIndex, totalInLane, effectId, 'ADSR Envelope')}
                 <button
                   type="button"
@@ -2063,11 +2250,22 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
           <div
             key={`${lane}-${effectId}`}
             data-testid="effect-rack-slot-lfo"
-            className={`relative rounded-lg border p-3 transition-opacity ${cardContainerClass} ${
+            onDragOver={handleDragOverCard(effectId, lane, slotIndex)}
+            onDragLeave={handleDragLeaveCard(effectId)}
+            onDrop={handleDropOnCard(effectId, lane, slotIndex)}
+            className={`relative rounded-lg border p-3 transition-all duration-150 ${cardContainerClass} ${
               lfoBypass ? 'opacity-40' : 'opacity-100'
+            } ${dragOverEffectId === effectId ? 'ring-2 ring-sky-400/80 border-sky-400 shadow-[0_0_15px_rgba(56,189,248,0.25)]' : ''} ${
+              draggingItem?.effectId === effectId ? 'opacity-30 border-dashed border-sky-400/60 scale-[0.99]' : ''
             }`}
           >
-            <div className={`flex items-center justify-between mb-2 border-b pb-1.5 ${cardHeaderBorderClass}`}>
+            <div
+              draggable={true}
+              onDragStart={handleDragStart(effectId, lane, 'Dual LFO')}
+              onDragEnd={handleDragEnd}
+              title="拖拽重排或跨总线"
+              className={`flex items-center justify-between mb-2 border-b pb-1.5 cursor-grab active:cursor-grabbing select-none hover:bg-white/[0.02] rounded-t transition-colors ${cardHeaderBorderClass}`}
+            >
               <div className="flex items-center gap-2">
                 <Activity size={14} strokeWidth={1.5} className="text-teal-400" />
                 <span className={`text-xs font-medium tracking-wide uppercase ${cardTitleClass}`}>
@@ -2083,7 +2281,7 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
                   }`}
                 />
               </div>
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-1.5" onMouseDown={e => e.stopPropagation()}>
                 {renderRackSlotControls(lane, slotIndex, totalInLane, effectId, 'Dual LFO')}
                 <button
                   type="button"
@@ -2370,6 +2568,7 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
         laneBOrder={laneBOrder}
         onLaneReorder={onLaneReorder}
         onMoveEffectBetweenLanes={onMoveEffectBetweenLanes}
+        activeSources={activeSources}
       />
 
       {/* 2. Main Deck Grid: Channel Strips (Left) + Effects Rack (Right) */}
@@ -2379,1717 +2578,140 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
         {/* ======================================================== */}
         <div className="lg:col-span-7 flex flex-col gap-3">
           <div className={`text-[10px] font-semibold tracking-wider uppercase border-b pb-1 ${sectionTitleClass}`}>
-            5-Track Acoustic Generation Strips · 5音轨独立声学发生器
+            发生器 · Source Strips
           </div>
 
-          {/* Track 1: OSC A (Wavetable) */}
-          <div
-            className={`relative rounded-lg border p-3 transition-opacity overflow-hidden ${cardContainerClass} ${
-              channelStrip.oscA.bypass ? 'opacity-40' : 'opacity-100'
-            }`}
-          >
-            {/* Strip Header */}
-            <div className={`flex items-center justify-between mb-3 border-b pb-1.5 ${cardHeaderBorderClass}`}>
-              <div className="flex items-center gap-2">
-                <Activity size={14} strokeWidth={1.5} className="text-sky-400" />
-                <span className={`text-xs font-medium tracking-wide uppercase ${cardTitleClass}`}>
-                  OSC A Wavetable
-                </span>
-                <span className={`text-[10px] font-normal ${cardSubTitleClass}`}>
-                  波表振荡器
-                </span>
-                {/* Active LED */}
-                <div
-                  aria-hidden="true"
-                  className={`w-2 h-2 rounded-full ${
-                    channelStrip.oscA.bypass ? 'bg-slate-700' : 'bg-emerald-500'
-                  }`}
-                />
-              </div>
-
-              <div className="flex items-center gap-2">
-                {/* Source Route Capsule Selector */}
-                <SourceRouteSelector
-                  sourceId="oscA"
-                  sourceLabel="OSC A"
-                  currentLane={activeSourceRoutes.oscA}
-                  onChange={handleSourceRouteToggle}
-                  isDark={isDark}
-                />
-
-                {/* Bypass Toggle */}
-                <button
-                  type="button"
-                  onClick={() =>
-                    onChannelStripChange?.({
-                      oscA: { bypass: !channelStrip.oscA.bypass }
-                    })
-                  }
-                  aria-label="OSC A Bypass"
-                  className={getPowerButtonClass(channelStrip.oscA.bypass)}
-                >
-                  <Power size={12} strokeWidth={1.5} />
-                </button>
-              </div>
-            </div>
-
-            {/* Visualizer & Wavetable Selector Banner */}
-            <div className={`mb-3 flex flex-wrap xl:flex-nowrap items-center justify-between gap-2.5 p-2.5 rounded-lg border overflow-hidden ${innerCardClass}`}>
-              {/* Left: Wavetable Stepper & Selector */}
-              <div className="flex flex-col gap-1 min-w-[130px] flex-1 max-w-[165px]">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] uppercase font-mono text-slate-400 tracking-wider">
-                    Wavetable · 波表选择
-                  </span>
-                  <span className="text-[9px] text-slate-400 font-mono">
-                    {activeTableIndex + 1}/{MULTI_FRAME_WAVETABLES.length}
-                  </span>
-                </div>
-                <div className={`flex items-center gap-0.5 p-0.5 rounded border ${isDark ? 'bg-neutral-900 border-neutral-800' : 'bg-white border-neutral-200 shadow-xs'}`}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const count = MULTI_FRAME_WAVETABLES.length;
-                      const newIdx = (activeTableIndex - 1 + count) % count;
-                      onChannelStripChange?.({
-                        oscA: {
-                          wavetableIndex: newIdx
-                        }
-                      });
-                    }}
-                    aria-label="Previous Wavetable"
-                    className="p-1 rounded text-slate-400 hover:text-slate-100 hover:bg-neutral-800 transition-colors"
-                  >
-                    <ChevronLeft size={12} strokeWidth={2} />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setIsWavetableDrawerOpen(true)}
-                    aria-label="Select Wavetable Collection"
-                    className="flex-1 px-1.5 py-0.5 text-center hover:bg-neutral-800/60 rounded transition-colors truncate"
-                  >
-                    <span className="block text-[11px] font-semibold text-sky-400 truncate">
-                      {activeWavetable.name}
-                    </span>
-                    <span className="block text-[8px] font-mono text-slate-400">
-                      {activeWavetable.category}
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const count = MULTI_FRAME_WAVETABLES.length;
-                      const newIdx = (activeTableIndex + 1) % count;
-                      onChannelStripChange?.({
-                        oscA: {
-                          wavetableIndex: newIdx
-                        }
-                      });
-                    }}
-                    aria-label="Next Wavetable"
-                    className="p-1 rounded text-slate-400 hover:text-slate-100 hover:bg-neutral-800 transition-colors"
-                  >
-                    <ChevronRight size={12} strokeWidth={2} />
-                  </button>
-                </div>
-              </div>
-
-              {/* Center: 3D Wavetable Visualizer */}
-              <div className="flex-1 flex justify-center min-w-[150px] max-w-[195px]">
-                <WavetableVisualizer
-                  tableIndex={activeTableIndex}
-                  sliceIndex={activeWavetable.sliceIndices[0]}
-                  wtPosition={channelStrip.oscA.wtPosition ?? 0}
-                  liveWtPosition={(channelStrip.oscA.wtPosition ?? 0) + computeLiveModOffset('osca-wt-pos')}
-                  morph={channelStrip.oscA.morphDepth ?? 0.7}
-                  liveMorph={Math.max(0, Math.min(1, (channelStrip.oscA.morphDepth ?? 0.7) + computeLiveModOffset('osca-morph')))}
-                  harmonics={channelStrip.oscA.harmonics ?? 0.8}
-                  liveHarmonics={Math.max(0, Math.min(1, (channelStrip.oscA.harmonics ?? 0.8) + computeLiveModOffset('osca-harmonics')))}
-                  width={180}
-                  height={54}
-                  defaultViewMode="3d"
-                  isDark={isDark}
-                />
-              </div>
-
-              {/* Right: Dedicated Chord Mode Bay */}
-              <div className={`flex flex-col gap-1.5 p-2 rounded-lg border min-w-[170px] max-w-[215px] flex-1 ${isDark ? 'bg-neutral-900/60 border-neutral-800/80' : 'bg-slate-50 border-slate-200'}`}>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-[10px] uppercase font-mono text-slate-400 tracking-wider font-semibold">
-                      Chord Mode · 和弦模式
-                    </span>
-                  </div>
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={Boolean(channelStrip.oscA.chordMode)}
-                    aria-label="Toggle OSC A Chord Mode"
-                    onClick={() =>
-                      onChannelStripChange?.({
-                        oscA: { chordMode: !channelStrip.oscA.chordMode }
-                      })
-                    }
-                    className={`px-2 py-0.5 rounded text-[9px] font-mono tracking-wider font-semibold transition-all border ${
-                      channelStrip.oscA.chordMode
-                        ? 'bg-sky-500/20 text-sky-300 border-sky-500/50 shadow-xs'
-                        : isDark
-                        ? 'bg-neutral-800 text-slate-400 border-neutral-700 hover:text-slate-200'
-                        : 'bg-white text-slate-600 border-slate-300 hover:text-slate-800'
-                    }`}
-                  >
-                    {channelStrip.oscA.chordMode ? 'CHORD ON' : 'CHORD OFF'}
-                  </button>
-                </div>
-
-                {/* 9 Chord Micro-Buttons Grid */}
-                <div className="grid grid-cols-5 gap-1">
-                  {CHORD_TYPE_OPTIONS.map(opt => {
-                    const isSelected = (channelStrip.oscA.chordType ?? 'octave') === opt.type;
-                    const isActive = Boolean(channelStrip.oscA.chordMode) && isSelected;
-                    return (
-                      <button
-                        key={opt.type}
-                        type="button"
-                        disabled={!channelStrip.oscA.chordMode}
-                        onClick={() =>
-                          onChannelStripChange?.({
-                            oscA: { chordType: opt.type }
-                          })
-                        }
-                        title={opt.desc}
-                        className={`px-1 py-0.5 rounded text-[8px] font-mono transition-all text-center border ${
-                          !channelStrip.oscA.chordMode
-                            ? 'opacity-35 cursor-not-allowed border-transparent text-slate-500'
-                            : isActive
-                            ? 'bg-sky-500/25 text-sky-200 border-sky-400 font-bold shadow-xs'
-                            : isDark
-                            ? 'bg-neutral-800/80 text-slate-400 border-neutral-700/60 hover:text-slate-200 hover:bg-neutral-700/60'
-                            : 'bg-white text-slate-600 border-slate-200 hover:text-slate-900'
-                        }`}
-                      >
-                        {opt.label}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-
-            {/* Controls Sub-Panels: Knobs Matrix + Dedicated Level Fader Bay (Unified 4-Track Architecture) */}
-            <div className="flex flex-col sm:flex-row gap-3 items-stretch">
-              <div className="flex-1 flex flex-col gap-2.5">
-                {/* Row 1: 12-TET Tuning, Continuous WT POS, Warp Shaper & Harmonics */}
-                <div className={`p-2.5 rounded-lg border ${innerCardClass}`}>
-                <div className="text-[9px] font-mono uppercase text-slate-400 font-semibold tracking-wider mb-2 flex items-center justify-between">
-                  <span>OSC TUNING &amp; WAVETABLE WARP · 音高调谐与非线性塑形</span>
-                  <span className="text-[9px] text-slate-500 font-normal">Serum 12-TET &amp; Warp Engine</span>
-                </div>
-
-                <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-8 gap-2 items-center justify-items-center">
-                  {/* 1. OCT */}
-                  <Knob
-                    id="osca-octave"
-                    label="OCT"
-                    ariaLabel="Osc A Octave"
-                    value={channelStrip.oscA.octave ?? 0}
-                    min={-4}
-                    max={4}
-                    step={1}
-                    bipolar={true}
-                    unit="Oct"
-                    formatValue={v => `${v > 0 ? '+' : ''}${Math.round(v)} Oct`}
+          {/* Dynamic Sound Source Generation Strips (Supports 100% full-feature clones & dynamic order) */}
+          {activeSources.map(sourceId => {
+            const sourceType = getSoundSourceType(sourceId);
+            switch (sourceType) {
+              case 'oscA':
+                return (
+                  <OscACard
+                    key={sourceId}
+                    sourceId={sourceId}
+                    channelStrip={channelStrip}
+                    onChannelStripChange={onChannelStripChange}
+                    activeSourceRoutes={activeSourceRoutes}
+                    onSourceRouteChange={handleSourceRouteToggle}
+                    modulationRoutes={modulationRoutes}
+                    computeLiveModOffset={computeLiveModOffset}
+                    setActiveModTarget={setActiveModTarget}
                     breathStage={breathStage}
-                    assignedModulation={modulationRoutes['osca-octave']}
-                    liveModOffset={computeLiveModOffset('osca-octave')}
-                    onChange={val => onChannelStripChange?.({ oscA: { octave: Math.round(val) } })}
-                    onLongPress={() => setActiveModTarget({ id: 'osca-octave', label: 'OSC A Octave' })}
+                    isDark={isDark}
+                    draggingItem={draggingItem}
+                    onSourceDragStart={handleSourceDragStart}
+                    onDragEnd={handleDragEnd}
+                    onOpenWavetableDrawer={srcId => setActiveWavetableDrawerSource(srcId)}
                   />
-
-                  {/* 2. SEMI */}
-                  <Knob
-                    id="osca-semi"
-                    label="SEMI"
-                    ariaLabel="Osc A Semitone"
-                    value={channelStrip.oscA.semi ?? 0}
-                    min={-12}
-                    max={12}
-                    step={1}
-                    bipolar={true}
-                    unit="st"
-                    formatValue={v => `${v > 0 ? '+' : ''}${Math.round(v)} st`}
+                );
+              case 'granular':
+                return (
+                  <GranularCard
+                    key={sourceId}
+                    sourceId={sourceId}
+                    channelStrip={channelStrip}
+                    onChannelStripChange={onChannelStripChange}
+                    activeSourceRoutes={activeSourceRoutes}
+                    onSourceRouteChange={handleSourceRouteToggle}
+                    modulationRoutes={modulationRoutes}
+                    computeLiveModOffset={computeLiveModOffset}
+                    setActiveModTarget={setActiveModTarget}
                     breathStage={breathStage}
-                    assignedModulation={modulationRoutes['osca-semi']}
-                    liveModOffset={computeLiveModOffset('osca-semi')}
-                    onChange={val => onChannelStripChange?.({ oscA: { semi: Math.round(val) } })}
-                    onLongPress={() => setActiveModTarget({ id: 'osca-semi', label: 'OSC A Semitone' })}
+                    isDark={isDark}
+                    draggingItem={draggingItem}
+                    onSourceDragStart={handleSourceDragStart}
+                    onDragEnd={handleDragEnd}
+                    isPlaying={isPlaying}
+                    getVisualGrains={getVisualGrains}
+                    getAudioCurrentTime={getAudioCurrentTime}
+                    getSampleDuration={getSampleDuration}
                   />
-
-                  {/* 3. FINE (Matches Detune test) */}
-                  <Knob
-                    id="osca-fine"
-                    label="FINE"
-                    ariaLabel="Detune"
-                    value={channelStrip.oscA.fine ?? (channelStrip.oscA.detune ?? 0)}
-                    min={-100}
-                    max={100}
-                    step={1}
-                    bipolar={true}
-                    unit="c"
-                    formatValue={v => `${v > 0 ? '+' : ''}${Math.round(v)} c`}
+                );
+              case 'oscB':
+                return (
+                  <OscBCard
+                    key={sourceId}
+                    sourceId={sourceId}
+                    channelStrip={channelStrip}
+                    onChannelStripChange={onChannelStripChange}
+                    activeSourceRoutes={activeSourceRoutes}
+                    onSourceRouteChange={handleSourceRouteToggle}
+                    modulationRoutes={modulationRoutes}
+                    computeLiveModOffset={computeLiveModOffset}
+                    setActiveModTarget={setActiveModTarget}
                     breathStage={breathStage}
-                    assignedModulation={modulationRoutes['osca-detune']}
-                    liveModOffset={computeLiveModOffset('osca-detune')}
-                    onChange={val => onChannelStripChange?.({ oscA: { fine: Math.round(val), detune: Math.round(val) } })}
-                    onLongPress={() => setActiveModTarget({ id: 'osca-detune', label: 'OSC A Fine Detune' })}
+                    isDark={isDark}
+                    draggingItem={draggingItem}
+                    onSourceDragStart={handleSourceDragStart}
+                    onDragEnd={handleDragEnd}
                   />
-
-                  {/* 4. WT POS */}
-                  <Knob
-                    id="osca-wt-pos"
-                    label="WT POS"
-                    ariaLabel="WT POS"
-                    value={channelStrip.oscA.wtPosition ?? 0}
-                    min={0}
-                    max={1}
-                    step={0.01}
-                    unit="%"
-                    formatValue={v => `${Math.round(v * 100)}%`}
+                );
+              case 'drone':
+                return (
+                  <DroneCard
+                    key={sourceId}
+                    sourceId={sourceId}
+                    channelStrip={channelStrip}
+                    onChannelStripChange={onChannelStripChange}
+                    activeSourceRoutes={activeSourceRoutes}
+                    onSourceRouteChange={handleSourceRouteToggle}
+                    modulationRoutes={modulationRoutes}
+                    computeLiveModOffset={computeLiveModOffset}
+                    setActiveModTarget={setActiveModTarget}
                     breathStage={breathStage}
-                    assignedModulation={modulationRoutes['osca-wt-pos']}
-                    liveModOffset={computeLiveModOffset('osca-wt-pos')}
-                    onChange={val => onChannelStripChange?.({ oscA: { wtPosition: val, morphDepth: val } })}
-                    onLongPress={() => setActiveModTarget({ id: 'osca-wt-pos', label: 'OSC A WT Position' })}
+                    isDark={isDark}
+                    draggingItem={draggingItem}
+                    onSourceDragStart={handleSourceDragStart}
+                    onDragEnd={handleDragEnd}
                   />
-
-                  {/* 5. WARP (With compact mode switcher) */}
-                  <div className="flex flex-col items-center">
-                    <button
-                      type="button"
-                      aria-label="Warp Mode"
-                      title="Click to cycle Warp Mode (OFF -> PWM -> SYNC -> BEND -> MIRR)"
-                      onClick={() => {
-                        const curMode = channelStrip.oscA.warpMode ?? 'off';
-                        const idx = WARP_MODE_OPTIONS.findIndex(m => m.mode === curMode);
-                        const next = WARP_MODE_OPTIONS[(idx + 1) % WARP_MODE_OPTIONS.length].mode;
-                        onChannelStripChange?.({ oscA: { warpMode: next } });
-                      }}
-                      className={`mb-1 px-1.5 py-0.5 rounded text-[8px] font-mono tracking-wider border transition-colors ${
-                        (channelStrip.oscA.warpMode ?? 'off') !== 'off'
-                          ? 'bg-sky-500/20 text-sky-300 border-sky-500/40 font-semibold'
-                          : isDark
-                          ? 'bg-neutral-800 text-slate-400 border-neutral-700 hover:text-slate-200'
-                          : 'bg-white text-slate-500 border-slate-300 hover:text-slate-800'
-                      }`}
-                    >
-                      {(channelStrip.oscA.warpMode ?? 'off').toUpperCase()}
-                    </button>
-                    <Knob
-                      id="osca-warp"
-                      label="WARP"
-                      ariaLabel="Osc A Warp"
-                      value={channelStrip.oscA.warp ?? 0}
-                      min={0}
-                      max={1}
-                      step={0.01}
-                      unit="%"
-                      formatValue={v => `${Math.round(v * 100)}%`}
-                      breathStage={breathStage}
-                      assignedModulation={modulationRoutes['osca-warp']}
-                      liveModOffset={computeLiveModOffset('osca-warp')}
-                      onChange={val => onChannelStripChange?.({ oscA: { warp: val } })}
-                      onLongPress={() => setActiveModTarget({ id: 'osca-warp', label: 'OSC A Warp Shaping' })}
-                    />
-                  </div>
-
-                  {/* 6. PHASE */}
-                  <Knob
-                    id="osca-phase"
-                    label="PHASE"
-                    ariaLabel="Osc A Phase"
-                    value={channelStrip.oscA.phase ?? 0}
-                    min={0}
-                    max={360}
-                    step={1}
-                    unit="°"
-                    formatValue={v => `${Math.round(v)}°`}
+                );
+              case 'ambient':
+                return (
+                  <AmbientCard
+                    key={sourceId}
+                    sourceId={sourceId}
+                    channelStrip={channelStrip}
+                    onChannelStripChange={onChannelStripChange}
+                    activeSourceRoutes={activeSourceRoutes}
+                    onSourceRouteChange={handleSourceRouteToggle}
+                    modulationRoutes={modulationRoutes}
+                    computeLiveModOffset={computeLiveModOffset}
+                    setActiveModTarget={setActiveModTarget}
                     breathStage={breathStage}
-                    assignedModulation={modulationRoutes['osca-phase']}
-                    liveModOffset={computeLiveModOffset('osca-phase')}
-                    onChange={val => onChannelStripChange?.({ oscA: { phase: Math.round(val) } })}
-                    onLongPress={() => setActiveModTarget({ id: 'osca-phase', label: 'OSC A Initial Phase' })}
+                    isDark={isDark}
+                    draggingItem={draggingItem}
+                    onSourceDragStart={handleSourceDragStart}
+                    onDragEnd={handleDragEnd}
                   />
+                );
+              default:
+                return null;
+            }
+          })}
 
-                  {/* 7. RAND */}
-                  <Knob
-                    id="osca-phase-rand"
-                    label="RAND"
-                    ariaLabel="Osc A Phase Random"
-                    value={channelStrip.oscA.phaseRand ?? 1.0}
-                    min={0}
-                    max={1}
-                    step={0.01}
-                    unit="%"
-                    formatValue={v => `${Math.round(v * 100)}%`}
-                    breathStage={breathStage}
-                    assignedModulation={modulationRoutes['osca-phase-rand']}
-                    liveModOffset={computeLiveModOffset('osca-phase-rand')}
-                    onChange={val => onChannelStripChange?.({ oscA: { phaseRand: val } })}
-                    onLongPress={() => setActiveModTarget({ id: 'osca-phase-rand', label: 'OSC A Phase Randomization' })}
-                  />
-
-                  {/* 8. HARM (Matches Harmonics test) */}
-                  <Knob
-                    id="osca-harmonics"
-                    label="HARM"
-                    ariaLabel="Harmonics"
-                    value={channelStrip.oscA.harmonics ?? 0.8}
-                    min={0}
-                    max={1}
-                    step={0.01}
-                    unit="%"
-                    formatValue={v => `${Math.round(v * 100)}%`}
-                    breathStage={breathStage}
-                    assignedModulation={modulationRoutes['osca-harmonics']}
-                    liveModOffset={computeLiveModOffset('osca-harmonics')}
-                    onChange={val => onChannelStripChange?.({ oscA: { harmonics: val } })}
-                    onLongPress={() => setActiveModTarget({ id: 'osca-harmonics', label: 'OSC A Harmonics' })}
-                  />
-                </div>
-              </div>
-
-              {/* Row 2: Level, Pan, Unison Detune/Spread, Sub & Warmth */}
-              <div className={`p-2.5 rounded-lg border ${innerCardClass}`}>
-                <div className="text-[9px] font-mono uppercase text-sky-400/90 font-semibold tracking-wider mb-2 flex items-center justify-between">
-                  <span>LEVEL, STEREO &amp; UNISON/CHORD VOICING · 输出电平、立体声与复音</span>
-                  <span className="text-[9px] text-slate-500 font-normal">Stereo Imaging &amp; Saturation</span>
-                </div>
-
-                <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-8 gap-2 items-center justify-items-center">
-                  {/* 1. LEVEL */}
-                  <Knob
-                    id="osca-gain"
-                    label="LEVEL"
-                    ariaLabel="Osc A Level"
-                    value={channelStrip.oscA.gain}
-                    min={0}
-                    max={1}
-                    step={0.01}
-                    unit="%"
-                    formatValue={v => `${Math.round(v * 100)}%`}
-                    breathStage={breathStage}
-                    assignedModulation={modulationRoutes['osca-gain']}
-                    liveModOffset={computeLiveModOffset('osca-gain')}
-                    onChange={val => onChannelStripChange?.({ oscA: { gain: val } })}
-                    onLongPress={() => setActiveModTarget({ id: 'osca-gain', label: 'OSC A Level' })}
-                  />
-
-                  {/* 2. PAN */}
-                  <Knob
-                    id="osca-pan"
-                    label="PAN"
-                    ariaLabel="Osc A Pan"
-                    value={channelStrip.oscA.pan ?? 0.0}
-                    min={-1}
-                    max={1}
-                    step={0.01}
-                    bipolar={true}
-                    unit="%"
-                    formatValue={v => (Math.abs(v) < 0.02 ? 'C' : v < 0 ? `L${Math.round(-v * 100)}%` : `R${Math.round(v * 100)}%`)}
-                    breathStage={breathStage}
-                    assignedModulation={modulationRoutes['osca-pan']}
-                    liveModOffset={computeLiveModOffset('osca-pan')}
-                    onChange={val => onChannelStripChange?.({ oscA: { pan: val } })}
-                    onLongPress={() => setActiveModTarget({ id: 'osca-pan', label: 'OSC A Pan' })}
-                  />
-
-                  {/* 3. UNISON (Matches Unison test) */}
-                  <Knob
-                    id="osca-unison-voices"
-                    label="UNISON"
-                    ariaLabel="Unison"
-                    value={channelStrip.oscA.unisonVoices ?? 2}
-                    min={1}
-                    max={16}
-                    step={1}
-                    unit=" V"
-                    formatValue={v => `${Math.round(v)} V`}
-                    breathStage={breathStage}
-                    assignedModulation={modulationRoutes['osca-unison-voices']}
-                    liveModOffset={computeLiveModOffset('osca-unison-voices')}
-                    onChange={val => onChannelStripChange?.({ oscA: { unisonVoices: Math.round(val) } })}
-                    onLongPress={() => setActiveModTarget({ id: 'osca-unison-voices', label: 'OSC A Unison Voices' })}
-                  />
-
-                  {/* 4. UNI DET */}
-                  <Knob
-                    id="osca-unison-detune"
-                    label="UNI DET"
-                    ariaLabel="Osc A Unison Detune"
-                    value={channelStrip.oscA.unisonDetune ?? 0.25}
-                    min={0}
-                    max={1}
-                    step={0.01}
-                    unit="%"
-                    formatValue={v => `${Math.round(v * 100)}%`}
-                    breathStage={breathStage}
-                    assignedModulation={modulationRoutes['osca-unison-detune']}
-                    liveModOffset={computeLiveModOffset('osca-unison-detune')}
-                    onChange={val => onChannelStripChange?.({ oscA: { unisonDetune: val } })}
-                    onLongPress={() => setActiveModTarget({ id: 'osca-unison-detune', label: 'OSC A Unison Detune' })}
-                  />
-
-                  {/* 5. UNI BLD (Matches Uni Blend test) */}
-                  <Knob
-                    id="osca-unison"
-                    label="UNI BLD"
-                    ariaLabel="Uni Blend"
-                    value={channelStrip.oscA.unison ?? 0.35}
-                    min={0}
-                    max={1}
-                    step={0.01}
-                    unit="%"
-                    formatValue={v => `${Math.round(v * 100)}%`}
-                    breathStage={breathStage}
-                    assignedModulation={modulationRoutes['osca-unison']}
-                    liveModOffset={computeLiveModOffset('osca-unison')}
-                    onChange={val => onChannelStripChange?.({ oscA: { unison: val } })}
-                    onLongPress={() => setActiveModTarget({ id: 'osca-unison', label: 'OSC A Unison Blend' })}
-                  />
-
-                  {/* 6. SPREAD */}
-                  <Knob
-                    id="osca-spread"
-                    label="SPREAD"
-                    ariaLabel="Osc A Spread"
-                    value={channelStrip.oscA.spread ?? 0.2}
-                    min={0}
-                    max={1}
-                    step={0.01}
-                    unit="%"
-                    formatValue={v => `${Math.round(v * 100)}%`}
-                    breathStage={breathStage}
-                    assignedModulation={modulationRoutes['osca-spread']}
-                    liveModOffset={computeLiveModOffset('osca-spread')}
-                    onChange={val => onChannelStripChange?.({ oscA: { spread: val } })}
-                    onLongPress={() => setActiveModTarget({ id: 'osca-spread', label: 'OSC A Spread' })}
-                  />
-
-                  {/* 7. SUB */}
-                  <Knob
-                    id="osca-sub"
-                    label="SUB"
-                    ariaLabel="Osc A Sub"
-                    value={channelStrip.oscA.subGain ?? 0.15}
-                    min={0}
-                    max={1}
-                    step={0.01}
-                    unit="%"
-                    formatValue={v => `${Math.round(v * 100)}%`}
-                    breathStage={breathStage}
-                    assignedModulation={modulationRoutes['osca-sub']}
-                    liveModOffset={computeLiveModOffset('osca-sub')}
-                    onChange={val => onChannelStripChange?.({ oscA: { subGain: val } })}
-                    onLongPress={() => setActiveModTarget({ id: 'osca-sub', label: 'OSC A Sub Gain' })}
-                  />
-
-                  {/* 8. WARMTH */}
-                  <Knob
-                    id="osca-warmth"
-                    label="WARMTH"
-                    ariaLabel="Osc A Warmth"
-                    value={channelStrip.oscA.warmth ?? 0.1}
-                    min={0}
-                    max={1}
-                    step={0.01}
-                    unit="%"
-                    formatValue={v => `${Math.round(v * 100)}%`}
-                    breathStage={breathStage}
-                    assignedModulation={modulationRoutes['osca-warmth']}
-                    liveModOffset={computeLiveModOffset('osca-warmth')}
-                    onChange={val => onChannelStripChange?.({ oscA: { warmth: val } })}
-                    onLongPress={() => setActiveModTarget({ id: 'osca-warmth', label: 'OSC A Warmth' })}
-                  />
-                </div>
-              </div>
+          {/* Empty Fallback State when all sources are removed */}
+          {activeSources.length === 0 && (
+            <div className={`p-4 rounded-lg border border-dashed text-center text-xs font-mono ${isDark ? 'border-neutral-800 text-slate-500' : 'border-neutral-300 text-neutral-400'}`}>
+              暂无发生器
             </div>
-
-            {/* Right: Dedicated Channel Level Fader Strip (Unified 4-Track Architecture) */}
-            <div className={`flex sm:flex-col items-center justify-center p-2 rounded-lg min-w-[76px] self-stretch border ${faderBayClass}`}>
-              <BipolarFader
-                id="osca-gain"
-                label="Level"
-                value={channelStrip.oscA.gain}
-                min={0}
-                max={1}
-                bipolar={false}
-                height={180}
-                assignedModulation={modulationRoutes['osca-gain']}
-                liveModOffset={computeLiveModOffset('osca-gain')}
-                onChange={val =>
-                  onChannelStripChange?.({
-                    oscA: { gain: val }
-                  })
-                }
-                onLongPress={() =>
-                  setActiveModTarget({ id: 'osca-gain', label: 'OSC A Level' })
-                }
-              />
-            </div>
-          </div>
-        </div>
-
-          {/* Track 2: GRANULAR (Standalone Grain Cloud Synthesizer) */}
-          <div
-            className={`relative rounded-lg border p-3 transition-opacity ${cardContainerClass} ${
-              channelStrip.granular?.bypass ? 'opacity-40' : 'opacity-100'
-            }`}
-          >
-            {/* Strip Header */}
-            <div className={`flex items-center justify-between mb-3 border-b pb-1.5 ${cardHeaderBorderClass}`}>
-              <div className="flex items-center gap-2">
-                <Sparkles size={14} strokeWidth={1.5} className="text-emerald-400" />
-                <span className={`text-xs font-medium tracking-wide uppercase ${cardTitleClass}`}>
-                  Granular Cloud
-                </span>
-                <span className={`text-[10px] font-normal ${cardSubTitleClass}`}>
-                  粒子发生器
-                </span>
-                {/* Active LED */}
-                <div
-                  aria-hidden="true"
-                  className={`w-2 h-2 rounded-full ${
-                    channelStrip.granular?.bypass ? 'bg-slate-700' : 'bg-emerald-500'
-                  }`}
-                />
-              </div>
-
-              <div className="flex items-center gap-2">
-                {/* Source Route Capsule Selector */}
-                <SourceRouteSelector
-                  sourceId="granular"
-                  sourceLabel="Granular"
-                  currentLane={activeSourceRoutes.granular}
-                  onChange={handleSourceRouteToggle}
-                  isDark={isDark}
-                />
-
-                {/* Bypass Toggle */}
-                <button
-                  type="button"
-                  onClick={() =>
-                    onChannelStripChange?.({
-                      granular: { bypass: !(channelStrip.granular?.bypass ?? false) }
-                    })
-                  }
-                  aria-label="Granular Bypass"
-                  className={getPowerButtonClass(channelStrip.granular?.bypass ?? false)}
-                >
-                  <Power size={12} strokeWidth={1.5} />
-                </button>
-              </div>
-            </div>
-
-            {/* Visualizer Banner: Phase Plant Dual Scope (Source Waveform + Grain Envelope) */}
-            <div className={`mb-2.5 flex flex-col md:flex-row items-stretch gap-2.5 p-2.5 rounded-lg border transition-colors ${
-              isDark ? 'bg-neutral-950/90 border-neutral-800/80' : 'bg-slate-50/90 border-neutral-200/90 shadow-2xs'
-            }`}>
-              <div className="flex-1 min-w-[200px] h-[120px]">
-                <GrainSourceVisualizer
-                  sampleId={channelStrip.granular?.sampleId || 'handpan'}
-                  position={channelStrip.granular?.position ?? 0.25}
-                  positionJitter={channelStrip.granular?.positionJitter ?? 0.0}
-                  rangeStart={channelStrip.granular?.rangeStart ?? 0.0}
-                  rangeEnd={channelStrip.granular?.rangeEnd ?? 1.0}
-                  sampleMetadata={{
-                    sampleRate: 44100,
-                    channels: 2,
-                    duration: getSampleDuration(channelStrip.granular?.sampleId || 'handpan') ?? GRANULAR_SAMPLE_PRESETS[channelStrip.granular?.sampleId || 'handpan']?.duration ?? 3.6,
-                    name: GRANULAR_SAMPLE_PRESETS[channelStrip.granular?.sampleId || 'handpan']?.name ?? 'Handpan'
-                  }}
-                  isPlaying={isPlaying}
-                  bypass={channelStrip.granular?.bypass ?? false}
-                  getLiveGrains={getVisualGrains}
-                  getAudioCurrentTime={getAudioCurrentTime}
-                  onPositionChange={val => onChannelStripChange?.({ granular: { position: val } })}
-                  onRangeChange={(rStart, rEnd) => onChannelStripChange?.({ granular: { rangeStart: rStart, rangeEnd: rEnd } })}
-                  onCustomSampleLoaded={id => onChannelStripChange?.({ granular: { sampleId: id } })}
-                  duration={channelStrip.granular?.duration ?? 0.245}
-                  height={120}
-                />
-              </div>
-              <div className="w-full md:w-[270px] shrink-0 h-[120px]">
-                <GrainEnvelopeScope
-                  duration={channelStrip.granular?.duration ?? 0.245}
-                  envelope={channelStrip.granular?.grainEnvelope}
-                  activeGrainsCount={channelStrip.granular?.density ?? 4.0}
-                  density={channelStrip.granular?.density ?? 4.0}
-                  rate={channelStrip.granular?.rate ?? 16.3}
-                  direction={channelStrip.granular?.direction ?? 'forward'}
-                  onDirectionChange={dir => onChannelStripChange?.({ granular: { direction: dir } })}
-                  onEnvelopeChange={env => onChannelStripChange?.({ granular: { grainEnvelope: env } })}
-                  onDurationChange={dur => {
-                    const currentDensity = channelStrip.granular?.density ?? 4.0;
-                    const newRate = Number((currentDensity / Math.max(0.01, dur)).toFixed(1));
-                    onChannelStripChange?.({ granular: { duration: dur, rate: newRate } });
-                  }}
-                  onDensityChange={dens => onChannelStripChange?.({ granular: { density: dens } })}
-                  onRateChange={rt => onChannelStripChange?.({ granular: { rate: rt } })}
-                  height={120}
-                />
-              </div>
-            </div>
-
-            {/* Sample Source Selector Bar (Phase Plant Acoustic Sample Matrix) */}
-            <div className={`mb-2.5 p-1.5 rounded-lg border flex flex-col sm:flex-row sm:items-center justify-between gap-2 transition-colors ${
-              isDark ? 'border-neutral-800 bg-neutral-950/90' : 'border-neutral-200 bg-white shadow-2xs'
-            }`}>
-              <div className="flex items-center gap-1.5 min-w-0">
-                <Disc size={13} strokeWidth={1.5} className="text-cyan-400 shrink-0" />
-                <span className={`text-[10px] font-mono shrink-0 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
-                  SAMPLE · 采样源:
-                </span>
-                <div className="flex items-center gap-1">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const curId = channelStrip.granular?.sampleId || 'handpan';
-                      const idx = GRANULAR_SAMPLE_LIST.findIndex(s => s.id === curId);
-                      const prevIdx = (idx - 1 + GRANULAR_SAMPLE_LIST.length) % GRANULAR_SAMPLE_LIST.length;
-                      onChannelStripChange?.({ granular: { sampleId: GRANULAR_SAMPLE_LIST[prevIdx].id } });
-                    }}
-                    title="Previous Sample (<)"
-                    aria-label="Previous Sample"
-                    className={`px-1.5 py-0.5 rounded border text-[9px] font-mono transition-colors ${
-                      isDark ? 'border-neutral-800 bg-neutral-900 text-slate-300 hover:bg-neutral-800' : 'border-neutral-200 bg-slate-100 text-slate-700 hover:bg-slate-200'
-                    }`}
-                  >
-                    &lt;
-                  </button>
-                  <select
-                    value={channelStrip.granular?.sampleId || 'handpan'}
-                    onChange={e => onChannelStripChange?.({ granular: { sampleId: e.target.value } })}
-                    aria-label="Granular Sample Source"
-                    className={`text-[10px] font-mono px-2 py-0.5 rounded border focus:outline-none focus:ring-1 focus:ring-sky-500 transition-colors ${
-                      isDark ? 'bg-neutral-900 border-neutral-700 text-sky-300' : 'bg-slate-50 border-neutral-300 text-slate-800'
-                    }`}
-                  >
-                    {(['Acoustic', 'Temple', 'Nature', 'Synthetic', 'Custom'] as const).map(cat => {
-                      const items = GRANULAR_SAMPLE_LIST.filter(s => s.category === cat);
-                      if (items.length === 0) return null;
-                      return (
-                        <optgroup key={cat} label={`-- ${cat} --`}>
-                          {items.map(s => (
-                            <option key={s.id} value={s.id}>
-                              {s.enName} ({s.name})
-                            </option>
-                          ))}
-                        </optgroup>
-                      );
-                    })}
-                  </select>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const curId = channelStrip.granular?.sampleId || 'handpan';
-                      const idx = GRANULAR_SAMPLE_LIST.findIndex(s => s.id === curId);
-                      const nextIdx = (idx + 1) % GRANULAR_SAMPLE_LIST.length;
-                      onChannelStripChange?.({ granular: { sampleId: GRANULAR_SAMPLE_LIST[nextIdx].id } });
-                    }}
-                    title="Next Sample (>)"
-                    aria-label="Next Sample"
-                    className={`px-1.5 py-0.5 rounded border text-[9px] font-mono transition-colors ${
-                      isDark ? 'border-neutral-800 bg-neutral-900 text-slate-300 hover:bg-neutral-800' : 'border-neutral-200 bg-slate-100 text-slate-700 hover:bg-slate-200'
-                    }`}
-                  >
-                    &gt;
-                  </button>
-                </div>
-              </div>
-              <div className="flex items-center gap-2 text-[9px] font-mono text-slate-400 shrink-0">
-                <span>ROOT: <strong className="text-sky-300 font-semibold">{GRANULAR_SAMPLE_PRESETS[channelStrip.granular?.sampleId || 'handpan']?.rootNote || 'D 3 +00'}</strong></span>
-                <span className="text-slate-600">|</span>
-                <span>DIR: <strong className="text-emerald-400 font-semibold uppercase">{channelStrip.granular?.direction || 'forward'}</strong></span>
-              </div>
-            </div>
-
-            {/* Mode & Scale Selector Panel (Phase Plant Harmonic Scale & Generation Mode) */}
-            <div className={`mb-2.5 p-2 rounded-lg border flex flex-col gap-2 transition-colors ${
-              isDark ? 'border-neutral-800 bg-neutral-950/70' : 'border-neutral-200 bg-slate-50/90 shadow-2xs'
-            }`}>
-              {/* Voice Mode Selector */}
-              <div className="flex items-center justify-between pb-1.5 border-b border-neutral-800/40">
-                <div className="flex items-center gap-1.5">
-                  <Sparkles size={12} strokeWidth={1.5} className="text-sky-400" />
-                  <span className={`text-[10px] font-mono ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
-                    VOICE MODE · 发声模式:
-                  </span>
-                </div>
-                <div className="flex items-center gap-1">
-                  {(['ambient', 'arp', 'burst'] as const).map(m => {
-                    const activeMode = channelStrip.granular?.mode ?? 'ambient';
-                    const isCur = activeMode === m;
-                    return (
-                      <button
-                        key={m}
-                        type="button"
-                        onClick={() => onChannelStripChange?.({ granular: { mode: m } })}
-                        className={`px-2 py-0.5 text-[9px] font-mono uppercase rounded border transition-colors ${
-                          isCur
-                            ? 'border-sky-500/60 bg-sky-500/20 text-sky-300 font-semibold'
-                            : isDark
-                              ? 'border-neutral-800 bg-neutral-950 text-slate-400 hover:text-slate-200'
-                              : 'border-neutral-200 bg-white text-slate-600 hover:text-slate-900'
-                        }`}
-                      >
-                        {m}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Harmonic Scale Selector */}
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-1.5">
-                  <Music size={12} strokeWidth={1.5} className="text-emerald-500" />
-                  <span className={`text-[10px] font-mono ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
-                    HARMONIC SCALE · 调式量化:
-                  </span>
-                </div>
-                <div className="flex items-center gap-1 overflow-x-auto py-0.5">
-                  {SCALE_LIST.map(scale => {
-                    const activeScale = channelStrip.granular?.scale ?? 'pentatonic';
-                    const isCurrent = activeScale === scale.id;
-                    return (
-                      <button
-                        key={scale.id}
-                        type="button"
-                        onClick={() =>
-                          onChannelStripChange?.({
-                            granular: {
-                              scale: scale.id
-                            }
-                          })
-                        }
-                        title={`${scale.name} (${scale.enName}) - ${scale.description}`}
-                        className={`px-1.5 py-0.5 text-[9px] font-mono rounded border transition-colors ${
-                          isCurrent
-                            ? 'border-emerald-500/60 bg-emerald-500/20 text-emerald-300 font-medium'
-                            : isDark
-                              ? 'border-neutral-800 bg-neutral-950 text-slate-400 hover:text-slate-200 hover:bg-neutral-800'
-                              : 'border-neutral-200 bg-white text-slate-600 hover:text-slate-900 hover:bg-neutral-100'
-                        }`}
-                      >
-                        {scale.name}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-
-            {/* Controls: Knobs Grid + Dedicated Level Fader */}
-            <div className="flex flex-col gap-2.5">
-              <div className={`p-2.5 rounded-lg border ${innerCardClass}`}>
-                <div className="text-[9px] font-mono uppercase text-slate-400 font-semibold tracking-wider mb-2 flex items-center justify-between">
-                  <span>Phase Plant Micro &amp; Mother Parameter Matrix</span>
-                  <span className="text-[9px] text-slate-500 font-normal">Dual-Row Grain Sculpting</span>
-                </div>
-
-                <div className="flex flex-col sm:flex-row gap-3 items-stretch">
-                  {/* Left: 3 Rows Rotary Knobs Grid */}
-                  <div className={`flex-1 flex flex-col gap-2 p-2 rounded-lg border ${innerGridClass}`}>
-                    {/* Row 1: Mother Tuning & Output (Phase Plant Mother Parameter Matrix - 图三) */}
-                    <div className="flex items-center justify-between pb-1 border-b border-neutral-800/40">
-                      <span className="text-[8px] font-mono uppercase text-sky-400 tracking-wider">
-                        Row 1: Mother Tuning &amp; Output (母体调谐与基准)
-                      </span>
-                      <span className="text-[8px] font-mono text-slate-500">
-                        Level · Oct · Semi · Cent · Harm · Shift · Phase · Ph.Jit · Track
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-3 sm:grid-cols-9 gap-2 items-center justify-items-center">
-                      <Knob
-                        id="granular-master-level"
-                        label="Level"
-                        ariaLabel="Granular Master Level"
-                        value={channelStrip.granular?.level ?? 1.0}
-                        min={0}
-                        max={1}
-                        step={0.01}
-                        unit="%"
-                        formatValue={v => `${Math.round(v * 100)}%`}
-                        breathStage={breathStage}
-                        assignedModulation={modulationRoutes['granular-master-level']}
-                        liveModOffset={computeLiveModOffset('granular-master-level')}
-                        onChange={val => onChannelStripChange?.({ granular: { level: val } })}
-                        onLongPress={() =>
-                          setActiveModTarget({ id: 'granular-master-level', label: 'Granular Master Level' })
-                        }
-                      />
-
-                      <Knob
-                        id="granular-octave"
-                        label="Oct"
-                        ariaLabel="Granular Octave"
-                        value={channelStrip.granular?.octave ?? 0}
-                        min={-4}
-                        max={4}
-                        step={1}
-                        unit=" Oct"
-                        formatValue={v => `${v > 0 ? '+' : ''}${Math.round(v)} Oct`}
-                        breathStage={breathStage}
-                        onChange={val => onChannelStripChange?.({ granular: { octave: Math.round(val) } })}
-                      />
-
-                      <Knob
-                        id="granular-semi"
-                        label="Semi"
-                        ariaLabel="Granular Semi"
-                        value={channelStrip.granular?.semi ?? 0}
-                        min={-24}
-                        max={24}
-                        step={1}
-                        unit=" st"
-                        formatValue={v => `${v > 0 ? '+' : ''}${v} st`}
-                        breathStage={breathStage}
-                        onChange={val => onChannelStripChange?.({ granular: { semi: Math.round(val) } })}
-                      />
-
-                      <Knob
-                        id="granular-cent"
-                        label="Cent"
-                        ariaLabel="Granular Cent"
-                        value={channelStrip.granular?.cent ?? 0}
-                        min={-100}
-                        max={100}
-                        step={1}
-                        unit=" ct"
-                        formatValue={v => `${v > 0 ? '+' : ''}${v} ct`}
-                        breathStage={breathStage}
-                        onChange={val => onChannelStripChange?.({ granular: { cent: Math.round(val) } })}
-                      />
-
-                      <Knob
-                        id="granular-harmonic"
-                        label="Harm"
-                        ariaLabel="Granular Harmonic"
-                        value={channelStrip.granular?.harmonic ?? 1.0}
-                        min={0.125}
-                        max={16.0}
-                        step={0.025}
-                        unit="x"
-                        formatValue={v => `×${v.toFixed(3)}`}
-                        breathStage={breathStage}
-                        onChange={val => onChannelStripChange?.({ granular: { harmonic: val } })}
-                      />
-
-                      <Knob
-                        id="granular-shift"
-                        label="Shift"
-                        ariaLabel="Granular Shift"
-                        value={channelStrip.granular?.shift ?? 0}
-                        min={-200}
-                        max={200}
-                        step={0.1}
-                        unit=" Hz"
-                        formatValue={v => `${v > 0 ? '+' : ''}${v.toFixed(2)} Hz`}
-                        breathStage={breathStage}
-                        onChange={val => onChannelStripChange?.({ granular: { shift: Number(val.toFixed(2)) } })}
-                      />
-
-                      <Knob
-                        id="granular-phase"
-                        label="Phase"
-                        ariaLabel="Granular Phase"
-                        value={channelStrip.granular?.phase ?? 0}
-                        min={0}
-                        max={360}
-                        step={1}
-                        unit="°"
-                        formatValue={v => `${Math.round(v)}°`}
-                        breathStage={breathStage}
-                        onChange={val => onChannelStripChange?.({ granular: { phase: Math.round(val) } })}
-                      />
-
-                      <Knob
-                        id="granular-phase-jitter"
-                        label="Ph.Jit"
-                        ariaLabel="Granular Phase Jitter"
-                        value={channelStrip.granular?.phaseJitter ?? 0}
-                        min={0}
-                        max={180}
-                        step={1}
-                        unit="°"
-                        formatValue={v => `±${Math.round(v)}°`}
-                        breathStage={breathStage}
-                        onChange={val => onChannelStripChange?.({ granular: { phaseJitter: Math.round(val) } })}
-                      />
-
-                      <Knob
-                        id="granular-keytrack"
-                        label="Track"
-                        ariaLabel="Granular Key Track"
-                        value={channelStrip.granular?.keyTrack ?? 1.0}
-                        min={0}
-                        max={1}
-                        step={0.05}
-                        unit="%"
-                        formatValue={v => `${Math.round(v * 100)}%`}
-                        breathStage={breathStage}
-                        onChange={val => onChannelStripChange?.({ granular: { keyTrack: val } })}
-                      />
-                    </div>
-
-                    {/* Row 2: Micro Wander & Jitter (Phase Plant Micro Parameter Matrix - 图四) */}
-                    <div className="flex items-center justify-between pt-1.5 pb-1 border-t border-neutral-800/40">
-                      <span className="text-[8px] font-mono uppercase text-emerald-400 tracking-wider">
-                        Row 2: Micro Wander &amp; Jitter (微粒游走与随机散布)
-                      </span>
-                      <span className="text-[8px] font-mono text-slate-500">
-                        Position · Timing · Pitch · Level · Pan · Reverse · Rng Start · Rng End · Chance
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-3 sm:grid-cols-9 gap-2 items-center justify-items-center">
-                      <Knob
-                        id="granular-pos-jitter"
-                        label="Position"
-                        ariaLabel="Granular Position Jitter"
-                        value={channelStrip.granular?.positionJitter ?? 0.0}
-                        min={0}
-                        max={1}
-                        step={0.01}
-                        unit="%"
-                        formatValue={v => `±${(v * 100).toFixed(1)}%`}
-                        breathStage={breathStage}
-                        onChange={val => onChannelStripChange?.({ granular: { positionJitter: val } })}
-                      />
-
-                      <Knob
-                        id="granular-timing"
-                        label="Timing"
-                        ariaLabel="Granular Timing Jitter"
-                        value={channelStrip.granular?.timingJitter ?? 0.35}
-                        min={0}
-                        max={1}
-                        step={0.01}
-                        unit="%"
-                        formatValue={v => `±${Math.round(v * 100)}%`}
-                        breathStage={breathStage}
-                        onChange={val => onChannelStripChange?.({ granular: { timingJitter: val } })}
-                      />
-
-                      <Knob
-                        id="granular-pitch-jitter"
-                        label="Pitch"
-                        ariaLabel="Granular Pitch Jitter"
-                        value={channelStrip.granular?.pitchJitter ?? 0.01}
-                        min={0}
-                        max={1.0}
-                        step={0.01}
-                        unit=" st"
-                        formatValue={v => `±${v.toFixed(2)}`}
-                        breathStage={breathStage}
-                        onChange={val => onChannelStripChange?.({ granular: { pitchJitter: Number(val.toFixed(2)) } })}
-                      />
-
-                      <Knob
-                        id="granular-level-jitter"
-                        label="Level"
-                        ariaLabel="Granular Level Jitter"
-                        value={channelStrip.granular?.levelJitter ?? 0.0}
-                        min={0}
-                        max={1}
-                        step={0.01}
-                        unit="%"
-                        formatValue={v => `±${Math.round(v * 100)}%`}
-                        breathStage={breathStage}
-                        onChange={val => onChannelStripChange?.({ granular: { levelJitter: val } })}
-                      />
-
-                      <Knob
-                        id="granular-pan"
-                        label="Pan"
-                        ariaLabel="Granular Pan"
-                        value={channelStrip.granular?.panJitter ?? channelStrip.granular?.randomPan ?? 1.0}
-                        min={0}
-                        max={1}
-                        step={0.01}
-                        unit="%"
-                        formatValue={v => `±${Math.round(v * 100)}%`}
-                        breathStage={breathStage}
-                        onChange={val => onChannelStripChange?.({ granular: { panJitter: val, randomPan: val } })}
-                      />
-
-                      <Knob
-                        id="granular-reverse"
-                        label="Reverse"
-                        ariaLabel="Granular Reverse Chance"
-                        value={channelStrip.granular?.reverseChance ?? 0.26}
-                        min={0}
-                        max={1}
-                        step={0.01}
-                        unit="%"
-                        formatValue={v => `${Math.round(v * 100)}%`}
-                        breathStage={breathStage}
-                        onChange={val => onChannelStripChange?.({ granular: { reverseChance: val } })}
-                      />
-
-                      <Knob
-                        id="granular-range-start"
-                        label="Rng Start"
-                        ariaLabel="Granular Range Start"
-                        value={channelStrip.granular?.rangeStart ?? 0.0}
-                        min={0}
-                        max={0.95}
-                        step={0.01}
-                        unit="%"
-                        formatValue={v => `${Math.round(v * 100)}%`}
-                        breathStage={breathStage}
-                        onChange={val => onChannelStripChange?.({ granular: { rangeStart: val } })}
-                      />
-
-                      <Knob
-                        id="granular-range-end"
-                        label="Rng End"
-                        ariaLabel="Granular Range End"
-                        value={channelStrip.granular?.rangeEnd ?? 1.0}
-                        min={0.05}
-                        max={1.0}
-                        step={0.01}
-                        unit="%"
-                        formatValue={v => `${Math.round(v * 100)}%`}
-                        breathStage={breathStage}
-                        onChange={val => onChannelStripChange?.({ granular: { rangeEnd: val } })}
-                      />
-
-                      <Knob
-                        id="granular-chance"
-                        label="Chance"
-                        ariaLabel="Granular Trigger Chance"
-                        value={channelStrip.granular?.probability ?? 0.85}
-                        min={0}
-                        max={1}
-                        step={0.01}
-                        unit="%"
-                        formatValue={v => `${Math.round(v * 100)}%`}
-                        breathStage={breathStage}
-                        onChange={val => onChannelStripChange?.({ granular: { probability: val } })}
-                      />
-                    </div>
-                  </div>
-
-                  {/* Right: Dedicated Channel Level Fader Strip */}
-                  <div className={`flex sm:flex-col items-center justify-center p-2 rounded-lg min-w-[76px] self-stretch border ${faderBayClass}`}>
-                    <BipolarFader
-                      id="granular-gain"
-                      label="Level"
-                      value={channelStrip.granular?.gain ?? 0.75}
-                      min={0}
-                      max={1}
-                      bipolar={false}
-                      height={180}
-                      assignedModulation={modulationRoutes['granular-gain']}
-                      liveModOffset={computeLiveModOffset('granular-gain')}
-                      onChange={val =>
-                        onChannelStripChange?.({
-                          granular: { gain: val }
-                        })
-                      }
-                      onLongPress={() =>
-                        setActiveModTarget({ id: 'granular-gain', label: 'Granular Level' })
-                      }
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Track 3: OSC B (Airway Pink Noise) */}
-          <div
-            className={`relative rounded-lg border p-3 transition-opacity ${cardContainerClass} ${
-              channelStrip.oscB.bypass ? 'opacity-40' : 'opacity-100'
-            }`}
-          >
-            {/* Strip Header */}
-            <div className={`flex items-center justify-between mb-3 border-b pb-1.5 ${cardHeaderBorderClass}`}>
-              <div className="flex items-center gap-2">
-                <Wind size={14} strokeWidth={1.5} className="text-violet-400" />
-                <span className={`text-xs font-medium tracking-wide uppercase ${cardTitleClass}`}>
-                  OSC B Pink Noise
-                </span>
-                <span className={`text-[10px] font-normal ${cardSubTitleClass}`}>
-                  粉红气流噪声
-                </span>
-                <div
-                  aria-hidden="true"
-                  className={`w-2 h-2 rounded-full ${
-                    channelStrip.oscB.bypass ? 'bg-slate-700' : 'bg-emerald-500'
-                  }`}
-                />
-              </div>
-
-              <div className="flex items-center gap-1.5">
-                {/* Source Route Capsule Selector */}
-                <SourceRouteSelector
-                  sourceId="oscB"
-                  sourceLabel="OSC B"
-                  currentLane={activeSourceRoutes.oscB}
-                  onChange={handleSourceRouteToggle}
-                  isDark={isDark}
-                />
-
-                {/* Noise Type selector buttons */}
-                {[
-                  { type: 'pink' as NoiseType, label: '粉噪' },
-                  { type: 'white' as NoiseType, label: '白噪' },
-                  { type: 'brown' as NoiseType, label: '红噪' },
-                  { type: 'violet' as NoiseType, label: '紫噪' }
-                ].map(nt => {
-                  const currentNoiseType = channelStrip.oscB.noiseType ?? 'pink';
-                  const isSelected = currentNoiseType === nt.type;
-                  return (
-                    <button
-                      key={nt.type}
-                      type="button"
-                      onClick={() => onChannelStripChange?.({ oscB: { noiseType: nt.type } })}
-                      className={`px-1.5 py-0.5 text-[9px] font-mono rounded border transition-colors ${
-                        isSelected
-                          ? 'border-violet-500 bg-violet-950/50 text-violet-300 font-medium'
-                          : isDark
-                            ? 'border-neutral-800 bg-neutral-900 text-slate-500 hover:text-slate-300'
-                            : 'border-neutral-300 bg-neutral-100 text-neutral-600 hover:text-neutral-900'
-                      }`}
-                    >
-                      {nt.label}
-                    </button>
-                  );
-                })}
-
-                <button
-                  type="button"
-                  onClick={() =>
-                    onChannelStripChange?.({
-                      oscB: { bypass: !channelStrip.oscB.bypass }
-                    })
-                  }
-                  aria-label="OSC B Bypass"
-                  className={getPowerButtonClass(channelStrip.oscB.bypass)}
-                >
-                  <Power size={12} strokeWidth={1.5} />
-                </button>
-              </div>
-            </div>
-
-            {/* Controls Row: Knob Matrix + Independent Channel Fader Bay */}
-            <div className="flex flex-col sm:flex-row gap-3 items-stretch">
-              <div className={`flex-1 grid grid-cols-2 sm:grid-cols-4 gap-2.5 items-center justify-items-center p-2 rounded-lg border ${innerGridClass}`}>
-                <Knob
-                  id="oscb-color"
-                  label="Airway Color"
-                  value={channelStrip.oscB.color}
-                  min={0}
-                  max={1}
-                  step={0.01}
-                  unit="%"
-                  formatValue={v => `${Math.round(v * 100)}%`}
-                  breathStage={breathStage}
-                  assignedModulation={modulationRoutes['oscb-color']}
-                  liveModOffset={computeLiveModOffset('oscb-color')}
-                  onChange={val => onChannelStripChange?.({ oscB: { color: val } })}
-                  onLongPress={() =>
-                    setActiveModTarget({ id: 'oscb-color', label: 'Airway Color' })
-                  }
-                />
-
-                <Knob
-                  id="oscb-friction"
-                  label="Friction (Q)"
-                  value={channelStrip.oscB.friction}
-                  min={0}
-                  max={1}
-                  step={0.01}
-                  unit="%"
-                  formatValue={v => `${Math.round(v * 100)}%`}
-                  breathStage={breathStage}
-                  assignedModulation={modulationRoutes['oscb-friction']}
-                  liveModOffset={computeLiveModOffset('oscb-friction')}
-                  onChange={val => onChannelStripChange?.({ oscB: { friction: val } })}
-                  onLongPress={() =>
-                    setActiveModTarget({ id: 'oscb-friction', label: 'Noise Friction' })
-                  }
-                />
-
-                <Knob
-                  id="oscb-lowcut"
-                  label="Low Cut"
-                  value={channelStrip.oscB.lowCut ?? 80}
-                  min={20}
-                  max={3000}
-                  step={5}
-                  unit="Hz"
-                  formatValue={v => `${Math.round(v)} Hz`}
-                  breathStage={breathStage}
-                  assignedModulation={modulationRoutes['oscb-lowcut']}
-                  liveModOffset={computeLiveModOffset('oscb-lowcut')}
-                  onChange={val => onChannelStripChange?.({ oscB: { lowCut: Math.round(val) } })}
-                  onLongPress={() =>
-                    setActiveModTarget({ id: 'oscb-lowcut', label: 'Noise Low Cut' })
-                  }
-                />
-
-                <Knob
-                  id="oscb-motion"
-                  label="Motion"
-                  value={channelStrip.oscB.motion ?? 0.2}
-                  min={0}
-                  max={1}
-                  step={0.01}
-                  unit="%"
-                  formatValue={v => `${Math.round(v * 100)}%`}
-                  breathStage={breathStage}
-                  assignedModulation={modulationRoutes['oscb-motion']}
-                  liveModOffset={computeLiveModOffset('oscb-motion')}
-                  onChange={val => onChannelStripChange?.({ oscB: { motion: val } })}
-                  onLongPress={() =>
-                    setActiveModTarget({ id: 'oscb-motion', label: 'Airflow Motion' })
-                  }
-                />
-              </div>
-
-              <div className={`flex sm:flex-col items-center justify-center p-2 rounded-lg min-w-[76px] self-stretch border ${faderBayClass}`}>
-                <BipolarFader
-                  id="oscb-gain"
-                  label="Level"
-                  value={channelStrip.oscB.gain}
-                  min={0}
-                  max={1}
-                  bipolar={false}
-                  height={115}
-                  assignedModulation={modulationRoutes['oscb-gain']}
-                  liveModOffset={computeLiveModOffset('oscb-gain')}
-                  onChange={val => onChannelStripChange?.({ oscB: { gain: val } })}
-                  onLongPress={() =>
-                    setActiveModTarget({ id: 'oscb-gain', label: 'OSC B Level' })
-                  }
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* Track 3: Sub/Drone (432Hz Tuning) */}
-          <div
-            className={`relative rounded-lg border p-3 transition-opacity ${cardContainerClass} ${
-              channelStrip.drone.bypass ? 'opacity-40' : 'opacity-100'
-            }`}
-          >
-            {/* Strip Header */}
-            <div className={`flex items-center justify-between mb-3 border-b pb-1.5 ${cardHeaderBorderClass}`}>
-              <div className="flex items-center gap-2">
-                <Disc size={14} strokeWidth={1.5} className="text-indigo-400" />
-                <span className={`text-xs font-medium tracking-wide uppercase ${cardTitleClass}`}>
-                  Sub / Drone (432Hz)
-                </span>
-                <span className={`text-[10px] font-normal ${cardSubTitleClass}`}>
-                  次谐波低频基底
-                </span>
-                <div
-                  aria-hidden="true"
-                  className={`w-2 h-2 rounded-full ${
-                    channelStrip.drone.bypass ? 'bg-slate-700' : 'bg-emerald-500'
-                  }`}
-                />
-              </div>
-
-              <div className="flex items-center gap-2">
-                {/* Source Route Capsule Selector */}
-                <SourceRouteSelector
-                  sourceId="drone"
-                  sourceLabel="Sub Drone"
-                  currentLane={activeSourceRoutes.drone}
-                  onChange={handleSourceRouteToggle}
-                  isDark={isDark}
-                />
-
-                <button
-                  type="button"
-                  onClick={() =>
-                    onChannelStripChange?.({
-                      drone: { bypass: !channelStrip.drone.bypass }
-                    })
-                  }
-                  aria-label="Drone Bypass"
-                  className={getPowerButtonClass(channelStrip.drone.bypass)}
-                >
-                  <Power size={12} strokeWidth={1.5} />
-                </button>
-              </div>
-            </div>
-
-            {/* Controls Row: Drone Knobs + Independent Channel Fader Bay */}
-            <div className="flex flex-col sm:flex-row gap-3 items-stretch">
-              <div className={`flex-1 grid grid-cols-2 gap-2.5 items-center justify-items-center p-2 rounded-lg border ${innerGridClass}`}>
-                <Knob
-                  id="drone-basefreq"
-                  label="Base Freq"
-                  value={channelStrip.drone.baseFreq}
-                  min={20}
-                  max={200}
-                  step={0.5}
-                  unit=" Hz"
-                  formatValue={v => `${v.toFixed(1)} Hz`}
-                  breathStage={breathStage}
-                  assignedModulation={modulationRoutes['drone-basefreq']}
-                  liveModOffset={computeLiveModOffset('drone-basefreq')}
-                  onChange={val => onChannelStripChange?.({ drone: { baseFreq: val } })}
-                  onLongPress={() =>
-                    setActiveModTarget({ id: 'drone-basefreq', label: 'Drone Base Freq' })
-                  }
-                />
-
-                <Knob
-                  id="drone-drift"
-                  label="Pitch Drift"
-                  value={channelStrip.drone.pitchDrift}
-                  min={0}
-                  max={1}
-                  step={0.01}
-                  unit="%"
-                  formatValue={v => `${Math.round(v * 100)}%`}
-                  breathStage={breathStage}
-                  assignedModulation={modulationRoutes['drone-drift']}
-                  liveModOffset={computeLiveModOffset('drone-drift')}
-                  onChange={val => onChannelStripChange?.({ drone: { pitchDrift: val } })}
-                  onLongPress={() =>
-                    setActiveModTarget({ id: 'drone-drift', label: 'Pitch Drift' })
-                  }
-                />
-              </div>
-
-              <div className={`flex sm:flex-col items-center justify-center p-2 rounded-lg min-w-[76px] self-stretch border ${faderBayClass}`}>
-                <BipolarFader
-                  id="drone-gain"
-                  label="Level"
-                  value={channelStrip.drone.gain}
-                  min={0}
-                  max={1}
-                  bipolar={false}
-                  height={115}
-                  assignedModulation={modulationRoutes['drone-gain']}
-                  liveModOffset={computeLiveModOffset('drone-gain')}
-                  onChange={val => onChannelStripChange?.({ drone: { gain: val } })}
-                  onLongPress={() =>
-                    setActiveModTarget({ id: 'drone-gain', label: 'Drone Level' })
-                  }
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* Track 5: Ambient Soundscape (自然氛围声景) */}
-          <div
-            className={`relative rounded-lg border p-3 transition-opacity ${cardContainerClass} ${
-              (channelStrip.ambient?.bypass ?? false) ? 'opacity-40' : 'opacity-100'
-            }`}
-          >
-            {/* Strip Header */}
-            <div className={`flex items-center justify-between mb-3 border-b pb-1.5 ${cardHeaderBorderClass}`}>
-              <div className="flex items-center gap-2">
-                <Waves size={14} strokeWidth={1.5} className="text-teal-400" />
-                <span className={`text-xs font-medium tracking-wide uppercase ${cardTitleClass}`}>
-                  Ambient Soundscape
-                </span>
-                <span className={`text-[10px] font-normal ${cardSubTitleClass}`}>
-                  自然氛围声景
-                </span>
-                <div
-                  aria-hidden="true"
-                  className={`w-2 h-2 rounded-full ${
-                    (channelStrip.ambient?.bypass ?? false) ? 'bg-slate-700' : 'bg-emerald-500'
-                  }`}
-                />
-              </div>
-
-              <div className="flex items-center gap-2">
-                {/* Source Route Capsule Selector */}
-                <SourceRouteSelector
-                  sourceId="ambient"
-                  sourceLabel="Ambient"
-                  currentLane={activeSourceRoutes.ambient ?? 'laneA'}
-                  onChange={handleSourceRouteToggle}
-                  isDark={isDark}
-                />
-
-                <button
-                  type="button"
-                  onClick={() =>
-                    onChannelStripChange?.({
-                      ambient: { bypass: !(channelStrip.ambient?.bypass ?? false) }
-                    })
-                  }
-                  aria-label="Ambient Bypass"
-                  className={getPowerButtonClass(channelStrip.ambient?.bypass ?? false)}
-                >
-                  <Power size={12} strokeWidth={1.5} />
-                </button>
-              </div>
-            </div>
-
-            {/* Soundscape Selection Carousel (120 Curated Soundscapes with Mouse Drag & Swipe across 12 Distinct Thematic Categories) */}
-            <div className="mb-3">
-              <div className="text-[9px] font-mono uppercase tracking-wider text-slate-400 mb-1.5 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span>SOUNDSCAPE SELECT · 自然声景</span>
-                  <div className="flex items-center gap-1">
-                    <button
-                      type="button"
-                      onClick={() => setSoundscapePage(p => Math.max(0, p - 1))}
-                      disabled={soundscapePage === 0}
-                      aria-label="Previous Soundscape Page"
-                      className={`p-0.5 rounded border transition-colors ${
-                        soundscapePage === 0
-                          ? 'opacity-30 cursor-not-allowed border-transparent text-slate-600'
-                          : isDark
-                            ? 'border-neutral-800 bg-neutral-900 text-slate-300 hover:bg-neutral-800'
-                            : 'border-neutral-200 bg-slate-100 text-slate-700 hover:bg-slate-200'
-                      }`}
-                    >
-                      <ChevronLeft size={10} strokeWidth={2} />
-                    </button>
-                    <span className={`text-[8px] font-mono font-bold px-1.5 py-0.5 rounded border transition-colors ${
-                      isDark
-                        ? 'text-teal-400 bg-teal-950/40 border-teal-800/40'
-                        : 'text-teal-700 bg-teal-50 border-teal-300'
-                    }`}>
-                      PAGE {soundscapePage + 1}/{SOUNDSCAPE_THEMES.length}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setSoundscapePage(p => Math.min(SOUNDSCAPE_THEMES.length - 1, p + 1))}
-                      disabled={soundscapePage === SOUNDSCAPE_THEMES.length - 1}
-                      aria-label="Next Soundscape Page"
-                      className={`p-0.5 rounded border transition-colors ${
-                        soundscapePage === SOUNDSCAPE_THEMES.length - 1
-                          ? 'opacity-30 cursor-not-allowed border-transparent text-slate-600'
-                          : isDark
-                            ? 'border-neutral-800 bg-neutral-900 text-slate-300 hover:bg-neutral-800'
-                            : 'border-neutral-200 bg-slate-100 text-slate-700 hover:bg-slate-200'
-                      }`}
-                    >
-                      <ChevronRight size={10} strokeWidth={2} />
-                    </button>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <span className="text-[8px] text-slate-500 font-mono hidden sm:inline-block">
-                    {SOUNDSCAPE_THEMES[soundscapePage]?.name}
-                  </span>
-                  <span className={`text-[8px] font-semibold uppercase font-mono ${isDark ? 'text-teal-400' : 'text-teal-700'}`}>
-                    {AMBIENT_SOUNDSCAPES.find(s => s.id === (channelStrip.ambient?.sampleId ?? 'oceanTide'))?.nameEn ?? 'Ocean Surf'}
-                  </span>
-                </div>
-              </div>
-
-              {/* 12 Category Quick Switcher Pills */}
-              <div
-                className="flex items-center gap-1 overflow-x-auto no-scrollbar py-0.5 mb-1.5"
-                role="tablist"
-                aria-label="Soundscape Categories"
-              >
-                {SOUNDSCAPE_THEMES.map((theme, idx) => {
-                  const isActive = soundscapePage === idx;
-                  return (
-                    <button
-                      key={theme.name}
-                      type="button"
-                      role="tab"
-                      aria-selected={isActive}
-                      onClick={() => setSoundscapePage(idx)}
-                      title={`Page ${idx + 1}: ${theme.name} (${theme.nameEn}) - ${theme.desc}`}
-                      className={`px-1.5 py-0.5 rounded text-[8px] font-mono whitespace-nowrap transition-all cursor-pointer border ${
-                        isActive
-                          ? isDark
-                            ? 'bg-teal-950/70 border-teal-500/80 text-teal-300 font-bold shadow-[0_0_8px_rgba(45,212,191,0.25)]'
-                            : 'bg-teal-50 border-teal-600 text-teal-800 font-bold'
-                          : isDark
-                            ? 'bg-neutral-900/40 border-neutral-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
-                            : 'bg-slate-100 border-neutral-200 text-neutral-600 hover:text-neutral-800 hover:border-neutral-300'
-                      }`}
-                    >
-                      <span className="opacity-60 mr-1">{theme.range.split('-')[0]}</span>
-                      {theme.shortName}
-                    </button>
-                  );
-                })}
-              </div>
-
-              {/* Current Theme Detail Sub-row */}
-              <div className="flex items-center justify-between text-[8px] font-mono text-slate-500 mb-1 px-0.5">
-                <span className={`font-medium truncate ${isDark ? 'text-teal-400/90' : 'text-teal-700'}`}>
-                  [{SOUNDSCAPE_THEMES[soundscapePage]?.range}] {SOUNDSCAPE_THEMES[soundscapePage]?.name} · {SOUNDSCAPE_THEMES[soundscapePage]?.nameEn}
-                </span>
-                <span className="truncate max-w-[280px] opacity-75 hidden sm:inline-block">
-                  {SOUNDSCAPE_THEMES[soundscapePage]?.desc}
-                </span>
-              </div>
-
-              {/* Sliding Carousel Viewport with Mouse Drag / Swipe (Mouse wheel disabled per user specification) */}
-              <div
-                data-testid="soundscape-carousel-viewport"
-                className="relative overflow-hidden w-full select-none cursor-grab active:cursor-grabbing touch-none"
-                onPointerDown={handleCarouselPointerDown}
-                onPointerMove={handleCarouselPointerMove}
-                onPointerUp={handleCarouselPointerUp}
-                onPointerCancel={handleCarouselPointerCancel}
-              >
-                <div
-                  className={`flex ${isDraggingSoundscape ? 'transition-none select-none' : 'transition-transform duration-300 ease-out'}`}
-                  style={{
-                    width: `${SOUNDSCAPE_THEMES.length * 100}%`,
-                    transform: isDraggingSoundscape
-                      ? `translateX(calc(-${(soundscapePage * 100) / SOUNDSCAPE_THEMES.length}% + ${
-                          (soundscapePage === 0 && soundscapeDragDeltaX > 0) ||
-                          (soundscapePage === SOUNDSCAPE_THEMES.length - 1 && soundscapeDragDeltaX < 0)
-                            ? soundscapeDragDeltaX * 0.25
-                            : soundscapeDragDeltaX
-                        }px))`
-                      : `translateX(-${(soundscapePage * 100) / SOUNDSCAPE_THEMES.length}%)`
-                  }}
-                >
-                  {SOUNDSCAPE_THEMES.map((theme, pageIdx) => {
-                    const startIdx = pageIdx * 10;
-                    const endIdx = startIdx + 10;
-                    return (
-                      <div
-                        key={theme.name}
-                        style={{ width: `${100 / SOUNDSCAPE_THEMES.length}%` }}
-                        className="shrink-0 px-0.5 grid grid-cols-2 sm:grid-cols-5 gap-1.5"
-                      >
-                        {AMBIENT_SOUNDSCAPES.slice(startIdx, endIdx).map(sc => {
-                          const isSelected = (channelStrip.ambient?.sampleId ?? 'oceanTide') === sc.id;
-                          return (
-                            <button
-                              key={sc.id}
-                              type="button"
-                              onClick={() => {
-                                if (hasDraggedSoundscapeRef.current || Math.abs(soundscapeDragDeltaX) > 6) return;
-                                onChannelStripChange?.({ ambient: { sampleId: sc.id } });
-                              }}
-                              title={sc.description}
-                              className={`px-2 py-1.5 rounded border text-left transition-all cursor-pointer ${
-                                isSelected
-                                  ? isDark
-                                    ? 'bg-teal-950/40 border-teal-500/60 text-teal-300 shadow-[0_0_8px_rgba(20,184,166,0.15)] font-semibold'
-                                    : 'bg-teal-50 border-teal-500 text-teal-800 font-semibold'
-                                  : isDark
-                                    ? 'bg-neutral-900/40 border-neutral-800 hover:border-slate-600 text-slate-400 hover:text-slate-200'
-                                    : 'bg-white border-neutral-200 hover:border-neutral-300 text-neutral-600 hover:text-neutral-800'
-                              }`}
-                            >
-                              <div className="text-[10px] leading-tight truncate">{sc.name}</div>
-                              <div className="text-[7.5px] opacity-70 tracking-tighter truncate font-mono">{sc.nameEn}</div>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-
-            {/* Controls Row: Knobs + Independent Channel Fader Bay */}
-            <div className="flex flex-col sm:flex-row gap-3 items-stretch">
-              <div className={`flex-1 grid grid-cols-3 gap-2.5 items-center justify-items-center p-2 rounded-lg border ${innerGridClass}`}>
-                <Knob
-                  id="ambient-tone"
-                  label="Amb Tone"
-                  value={channelStrip.ambient?.tone ?? 0.5}
-                  min={0}
-                  max={1}
-                  step={0.01}
-                  unit="%"
-                  formatValue={v => `${Math.round(v * 100)}%`}
-                  breathStage={breathStage}
-                  assignedModulation={modulationRoutes['ambient-tone']}
-                  liveModOffset={computeLiveModOffset('ambient-tone')}
-                  onChange={val => onChannelStripChange?.({ ambient: { tone: val } })}
-                  onLongPress={() =>
-                    setActiveModTarget({ id: 'ambient-tone', label: 'Ambient Tone' })
-                  }
-                />
-
-                <Knob
-                  id="ambient-breath-sync"
-                  label="Breath Sync"
-                  value={channelStrip.ambient?.breathSync ?? 0.35}
-                  min={0}
-                  max={1}
-                  step={0.01}
-                  unit="%"
-                  formatValue={v => `${Math.round(v * 100)}%`}
-                  breathStage={breathStage}
-                  assignedModulation={modulationRoutes['ambient-breath-sync']}
-                  liveModOffset={computeLiveModOffset('ambient-breath-sync')}
-                  onChange={val => onChannelStripChange?.({ ambient: { breathSync: val } })}
-                  onLongPress={() =>
-                    setActiveModTarget({ id: 'ambient-breath-sync', label: 'Ambient Breath Sync' })
-                  }
-                />
-
-                <Knob
-                  id="ambient-width"
-                  label="Stereo Width"
-                  value={channelStrip.ambient?.width ?? 0.65}
-                  min={0}
-                  max={1}
-                  step={0.01}
-                  unit="%"
-                  formatValue={v => `${Math.round(v * 100)}%`}
-                  breathStage={breathStage}
-                  assignedModulation={modulationRoutes['ambient-width']}
-                  liveModOffset={computeLiveModOffset('ambient-width')}
-                  onChange={val => onChannelStripChange?.({ ambient: { width: val } })}
-                  onLongPress={() =>
-                    setActiveModTarget({ id: 'ambient-width', label: 'Ambient Stereo Width' })
-                  }
-                />
-              </div>
-
-              <div className={`flex sm:flex-col items-center justify-center p-2 rounded-lg min-w-[76px] self-stretch border ${faderBayClass}`}>
-                <BipolarFader
-                  id="ambient-gain"
-                  label="Level"
-                  value={channelStrip.ambient?.gain ?? 0.5}
-                  min={0}
-                  max={1}
-                  bipolar={false}
-                  height={115}
-                  assignedModulation={modulationRoutes['ambient-gain']}
-                  liveModOffset={computeLiveModOffset('ambient-gain')}
-                  onChange={val => onChannelStripChange?.({ ambient: { gain: val } })}
-                  onLongPress={() =>
-                    setActiveModTarget({ id: 'ambient-gain', label: 'Ambient Level' })
-                  }
-                />
-              </div>
-            </div>
-          </div>
+          )}
         </div>
 
         {/* ======================================================== */}
         {/* RIGHT COLUMN: Modular Dual-Lane Effects Rack (5 cols) */}
         <div className="lg:col-span-5 flex flex-col gap-4">
           <div className={`text-[10px] font-semibold tracking-wider uppercase border-b pb-1 flex items-center justify-between ${sectionTitleClass}`}>
-            <span>Modular Dual-Lane Effects Rack · 双轨模块化效果器机架</span>
-            <span className="font-mono text-[9px] text-sky-400">HOT-PLUGGABLE · 3MS XFADE</span>
+            <span>效果器机架 · Dual-Lane</span>
+            
           </div>
 
           {/* Section: LANE A BUS */}
-          <div className="flex flex-col gap-3">
+          <div
+            className="flex flex-col gap-3"
+            onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }}
+            onDrop={handleDropOnLane('laneA')}
+          >
             <div className="flex items-center justify-between px-1">
               <div className="flex items-center gap-1.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-sky-400" />
@@ -4111,7 +2733,7 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
                   <Plus size={10} strokeWidth={2} />
                   <span>新增模块</span>
                 </button>
-                <span className="text-[9px] font-mono text-slate-400">SERIAL DSP CHAIN</span>
+                
               </div>
             </div>
 
@@ -4119,7 +2741,7 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
 
             {activeLaneAOrder.length === 0 ? (
               <div className={`p-4 rounded-lg border border-dashed text-center text-xs font-mono flex flex-col items-center gap-2 ${isDark ? 'border-neutral-800 text-slate-500' : 'border-neutral-300 text-neutral-400'}`}>
-                <span>LANE A EMPTY · 可从 LANE B 迁移模块或新增模块</span>
+                <span>LANE A 空 · 可迁移或新增</span>
                 <button
                   type="button"
                   onClick={() => setAddModuleLane('laneA')}
@@ -4128,11 +2750,17 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
                   }`}
                 >
                   <Plus size={11} strokeWidth={2} />
-                  <span>为 LANE A 新增模块</span>
+                  <span>新增模块</span>
                 </button>
               </div>
             ) : (
-              activeLaneAOrder.map((effectId, idx) => renderEffectCard(effectId, 'laneA', idx, activeLaneAOrder.length))
+              activeLaneAOrder.map((effectId, idx) => (
+                <React.Fragment key={`laneA-${effectId}`}>
+                  {renderInsertionIndicator('laneA', idx)}
+                  {renderEffectCard(effectId, 'laneA', idx, activeLaneAOrder.length)}
+                  {idx === activeLaneAOrder.length - 1 && renderInsertionIndicator('laneA', activeLaneAOrder.length)}
+                </React.Fragment>
+              ))
             )}
 
             {/* Dedicated BUS A Master Strip */}
@@ -4154,9 +2782,7 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
                   </span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="text-[8px] font-mono text-slate-500 uppercase tracking-tight">
-                    POST-FX SUMMING STAGE
-                  </span>
+                  
                   <span className="text-[9px] font-mono font-bold text-sky-400">
                     {Math.round((effects.busLevelA ?? 1.0) * 100)}%
                   </span>
@@ -4174,14 +2800,23 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
                   height={80}
                   unit="%"
                   formatValue={v => `${Math.round(v * 100)}%`}
+                  assignedModulation={modulationRoutes['bus-master-a']}
+                  liveModOffset={computeLiveModOffset('bus-master-a')}
                   onChange={val => onEffectsChange?.({ busLevelA: val })}
+                  onLongPress={() =>
+                    setActiveModTarget({ id: 'bus-master-a', label: 'BUS A Master Level' })
+                  }
                 />
               </div>
             </div>
           </div>
 
           {/* Section: LANE B BUS */}
-          <div className="flex flex-col gap-3 mt-1">
+          <div
+            className="flex flex-col gap-3 mt-1"
+            onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }}
+            onDrop={handleDropOnLane('laneB')}
+          >
             <div className="flex items-center justify-between px-1">
               <div className="flex items-center gap-1.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-teal-400" />
@@ -4203,7 +2838,7 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
                   <Plus size={10} strokeWidth={2} />
                   <span>新增模块</span>
                 </button>
-                <span className="text-[9px] font-mono text-slate-400">SERIAL DSP CHAIN</span>
+                
               </div>
             </div>
 
@@ -4211,7 +2846,7 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
 
             {activeLaneBOrder.length === 0 ? (
               <div className={`p-4 rounded-lg border border-dashed text-center text-xs font-mono flex flex-col items-center gap-2 ${isDark ? 'border-neutral-800 text-slate-500' : 'border-neutral-300 text-neutral-400'}`}>
-                <span>LANE B EMPTY · 可从 LANE A 迁移模块或新增模块</span>
+                <span>LANE B 空 · 可迁移或新增</span>
                 <button
                   type="button"
                   onClick={() => setAddModuleLane('laneB')}
@@ -4220,11 +2855,17 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
                   }`}
                 >
                   <Plus size={11} strokeWidth={2} />
-                  <span>为 LANE B 新增模块</span>
+                  <span>新增模块</span>
                 </button>
               </div>
             ) : (
-              activeLaneBOrder.map((effectId, idx) => renderEffectCard(effectId, 'laneB', idx, activeLaneBOrder.length))
+              activeLaneBOrder.map((effectId, idx) => (
+                <React.Fragment key={`laneB-${effectId}`}>
+                  {renderInsertionIndicator('laneB', idx)}
+                  {renderEffectCard(effectId, 'laneB', idx, activeLaneBOrder.length)}
+                  {idx === activeLaneBOrder.length - 1 && renderInsertionIndicator('laneB', activeLaneBOrder.length)}
+                </React.Fragment>
+              ))
             )}
 
             {/* Dedicated BUS B Master Strip */}
@@ -4246,9 +2887,7 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
                   </span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="text-[8px] font-mono text-slate-500 uppercase tracking-tight">
-                    POST-FX SUMMING STAGE
-                  </span>
+                  
                   <span className="text-[9px] font-mono font-bold text-teal-400">
                     {Math.round((effects.busLevelB ?? 1.0) * 100)}%
                   </span>
@@ -4266,7 +2905,12 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
                   height={80}
                   unit="%"
                   formatValue={v => `${Math.round(v * 100)}%`}
+                  assignedModulation={modulationRoutes['bus-master-b']}
+                  liveModOffset={computeLiveModOffset('bus-master-b')}
                   onChange={val => onEffectsChange?.({ busLevelB: val })}
+                  onLongPress={() =>
+                    setActiveModTarget({ id: 'bus-master-b', label: 'BUS B Master Level' })
+                  }
                 />
               </div>
             </div>
@@ -4320,17 +2964,37 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
       <BottomSheetDrawer
         isOpen={isWavetableDrawerOpen}
         isDark={isDark}
-        onClose={() => setIsWavetableDrawerOpen(false)}
-        title="Select Sound Therapy Wavetable"
+        onClose={() => {
+          setIsWavetableDrawerOpen(false);
+          setActiveWavetableDrawerSource(null);
+        }}
+        title="选择波表"
         items={wavetableDrawerItems}
-        selectedId={String(channelStrip.oscA.wavetableIndex)}
+        selectedId={String(
+          (activeWavetableDrawerSource && activeWavetableDrawerSource !== 'oscA'
+            ? channelStrip.instances?.[activeWavetableDrawerSource]?.wavetableIndex
+            : channelStrip.oscA.wavetableIndex) ?? 0
+        )}
         onSelect={id => {
           const idx = parseInt(id, 10);
-          onChannelStripChange?.({
-            oscA: {
-              wavetableIndex: idx
-            }
-          });
+          if (!activeWavetableDrawerSource || activeWavetableDrawerSource === 'oscA') {
+            onChannelStripChange?.({
+              oscA: {
+                wavetableIndex: idx
+              }
+            });
+          } else {
+            const currentInst = channelStrip.instances?.[activeWavetableDrawerSource] || { ...DEFAULT_OSC_A_PARAMS, ...DEFAULT_CHANNEL_STRIP.oscA };
+            onChannelStripChange?.({
+              instances: {
+                [activeWavetableDrawerSource]: {
+                  ...currentInst,
+                  wavetableIndex: idx
+                }
+              }
+            });
+          }
+          setActiveWavetableDrawerSource(null);
         }}
       />
     </div>

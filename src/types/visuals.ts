@@ -41,6 +41,8 @@ export interface VisualRenderParams {
   stage: BreathStage;
   stageProgress: number;   // 0..1
   isDarkTheme: boolean;
+  /** Soft palette stage background; falls back to the neutral mode default */
+  background?: string;
   preset: VisualPresetId;
   oscAActivity: number;    // 0..1
   oscBActivity: number;    // 0..1

@@ -61,8 +61,11 @@ describe('R1 Acceptance Verification: Sound Source Decoupling & Particle Isolati
   // =========================================================================
   describe('R1-AC2: engine.getVisualGrains() Isolation & Absence of OscA Fallback', () => {
     it('strictly queries GranularChannel and never accesses oscA for visual grains', () => {
+      // OscAChannel no longer exposes getActiveVisualGrains at all (stub removed);
+      // the absence of the method itself enforces the isolation contract.
+      expect((engine.oscA as unknown as Record<string, unknown>).getActiveVisualGrains).toBeUndefined();
+
       const granularSpy = vi.spyOn(engine.granular, 'getActiveVisualGrains');
-      const oscASpy = vi.spyOn(engine.oscA, 'getActiveVisualGrains');
 
       // When granular is active
       engine.updateChannelStrip({
@@ -70,10 +73,8 @@ describe('R1 Acceptance Verification: Sound Source Decoupling & Particle Isolati
       });
       engine.getVisualGrains();
       expect(granularSpy).toHaveBeenCalled();
-      expect(oscASpy).not.toHaveBeenCalled();
 
       granularSpy.mockClear();
-      oscASpy.mockClear();
 
       // When granular is bypassed
       engine.updateChannelStrip({
@@ -81,7 +82,6 @@ describe('R1 Acceptance Verification: Sound Source Decoupling & Particle Isolati
       });
       const grains = engine.getVisualGrains();
       expect(grains).toEqual([]);
-      expect(oscASpy).not.toHaveBeenCalled();
     });
   });
 

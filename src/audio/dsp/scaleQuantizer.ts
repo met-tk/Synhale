@@ -50,7 +50,11 @@ export const SCALES: Record<ScaleType, ScaleDefinition> = {
     id: 'solfeggio',
     name: '索尔菲吉奥疗愈',
     enName: 'Solfeggio 432/528',
-    intervals: [0, 3, 5, 7, 10, 12], // Healing harmonic series
+    // Major-minor blend: root, minor 3rd, 4th, 5th, minor 7th, major 7th.
+    // Replaces the invalid `12` (octave root) which was dead in quantizeToScale
+    // (noteInOctave is always in [0,11]) and caused duplicate semitones in
+    // getScaleFrequency (degree 5 and 6 both mapped to the octave root).
+    intervals: [0, 3, 5, 7, 10, 11],
     description: '基于 432Hz 自然谐振与 528Hz DNA 转化频率的谐波共振'
   },
   minor: {

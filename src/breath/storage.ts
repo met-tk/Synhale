@@ -1,4 +1,6 @@
 import type { BreathRhythmConfig, ParameterAutomationConfig } from '../types';
+import { isRecord, readStoredJson, requireStoredJson, writeStoredJson } from '../audio/storage/safeStorage';
+import { BREATH_STAGES } from '../audio/storage/curveValidation';
 
 export interface FactoryRhythm extends BreathRhythmConfig {
   id: string;
@@ -91,6 +93,27 @@ export const FACTORY_AUTOMATIONS: ParameterAutomationConfig[] = [
   }
 ];
 
+/** Validates each stage and detaches stored data from mutable factory defaults. */
+export function validateAndRepairAutomations(raw: unknown): ParameterAutomationConfig[] {
+  const source = Array.isArray(raw) ? raw : FACTORY_AUTOMATIONS;
+  return source.slice(0, 256).flatMap((config): ParameterAutomationConfig[] => {
+    if (!isRecord(config) || typeof config.targetParam !== 'string' || !config.targetParam.trim()
+      || ['__proto__', 'constructor', 'prototype'].includes(config.targetParam)) return [];
+    const result = { targetParam: config.targetParam.slice(0, 128) } as ParameterAutomationConfig;
+    for (const stage of BREATH_STAGES) {
+      const curve = isRecord(config[stage]) ? config[stage] : {};
+      const finite = (value: unknown, fallback: number, min: number, max: number) =>
+        typeof value === 'number' && Number.isFinite(value) ? Math.max(min, Math.min(max, value)) : fallback;
+      result[stage] = {
+        startVal: finite(curve.startVal, 0, 0, 1),
+        endVal: finite(curve.endVal, 0, 0, 1),
+        tension: finite(curve.tension, 0, -1, 1)
+      };
+    }
+    return [result];
+  });
+}
+
 export interface SynhaleStoragePayload {
   schemaVersion: 2;
   activePreset: string;
@@ -107,7 +130,7 @@ export const STORAGE_KEY_CUSTOM_RHYTHM = 'synhale_custom_rhythm';
  */
 export function validateAndRepairRhythm(raw: any): BreathRhythmConfig & { id?: string; name?: string } {
   const fallback = FACTORY_RHYTHMS.box;
-  if (!raw || typeof raw !== 'object') {
+  if (!isRecord(raw)) {
     return { ...fallback };
   }
 
@@ -118,8 +141,8 @@ export function validateAndRepairRhythm(raw: any): BreathRhythmConfig & { id?: s
     typeof v === 'number' && Number.isFinite(v) ? Math.max(0.0, Math.min(60.0, v)) : fallbackVal;
 
   return {
-    id: typeof raw.id === 'string' ? raw.id : fallback.id,
-    name: typeof raw.name === 'string' ? raw.name : fallback.name,
+    id: typeof raw.id === 'string' ? raw.id.slice(0, 64) : fallback.id,
+    name: typeof raw.name === 'string' ? raw.name.slice(0, 64) : fallback.name,
     inhale: clampActiveStage(raw.inhale, fallback.inhale),
     holdIn: clampHold(raw.holdIn, fallback.holdIn),
     exhale: clampActiveStage(raw.exhale, fallback.exhale),
@@ -135,26 +158,16 @@ export function saveBreathConfig(
   customRhythm: BreathRhythmConfig,
   automations: ParameterAutomationConfig[] = FACTORY_AUTOMATIONS
 ): boolean {
-  if (typeof localStorage === 'undefined') {
-    return false;
-  }
 
   const payload: SynhaleStoragePayload = {
     schemaVersion: 2,
-    activePreset: activePreset || 'box-4-4-4-4',
+    activePreset: typeof activePreset === 'string' && activePreset ? activePreset.slice(0, 64) : 'box-4-4-4-4',
     customRhythm: validateAndRepairRhythm(customRhythm),
-    automations: Array.isArray(automations) ? automations : FACTORY_AUTOMATIONS,
+    automations: validateAndRepairAutomations(automations),
     updatedAt: Date.now()
   };
 
-  try {
-    const serialized = JSON.stringify(payload);
-    localStorage.setItem(STORAGE_KEY_CONFIG, serialized);
-    return true;
-  } catch {
-    // QuotaExceededError or private browsing
-    return false;
-  }
+  return writeStoredJson(STORAGE_KEY_CONFIG, payload);
 }
 
 /**
@@ -165,28 +178,19 @@ export function loadBreathConfig(): SynhaleStoragePayload {
     schemaVersion: 2,
     activePreset: 'box-4-4-4-4',
     customRhythm: { ...FACTORY_RHYTHMS.box },
-    automations: FACTORY_AUTOMATIONS,
+    automations: validateAndRepairAutomations(FACTORY_AUTOMATIONS),
     updatedAt: Date.now()
   };
 
-  if (typeof localStorage === 'undefined') {
-    return defaultPayload;
-  }
-
   try {
-    const raw = localStorage.getItem(STORAGE_KEY_CONFIG);
-    if (!raw) {
-      return defaultPayload;
-    }
-
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === 'object' && parsed.schemaVersion === 2) {
+    const parsed = readStoredJson(STORAGE_KEY_CONFIG);
+    if (isRecord(parsed) && parsed.schemaVersion === 2) {
       return {
         schemaVersion: 2,
-        activePreset: typeof parsed.activePreset === 'string' ? parsed.activePreset : 'box-4-4-4-4',
+        activePreset: typeof parsed.activePreset === 'string' ? parsed.activePreset.slice(0, 64) : 'box-4-4-4-4',
         customRhythm: validateAndRepairRhythm(parsed.customRhythm),
-        automations: Array.isArray(parsed.automations) ? parsed.automations : FACTORY_AUTOMATIONS,
-        updatedAt: parsed.updatedAt ?? Date.now()
+        automations: validateAndRepairAutomations(parsed.automations),
+        updatedAt: typeof parsed.updatedAt === 'number' && Number.isFinite(parsed.updatedAt) ? parsed.updatedAt : Date.now()
       };
     }
 
@@ -202,41 +206,19 @@ export function loadBreathConfig(): SynhaleStoragePayload {
  * Safely saves a custom rhythm to LocalStorage
  */
 export function saveCustomRhythm(rhythm: BreathRhythmConfig): boolean {
-  if (typeof localStorage === 'undefined') return false;
-
-  try {
-    const validated = validateAndRepairRhythm(rhythm);
-    localStorage.setItem(STORAGE_KEY_CUSTOM_RHYTHM, JSON.stringify(validated));
-    return true;
-  } catch {
-    return false;
-  }
+  return writeStoredJson(STORAGE_KEY_CUSTOM_RHYTHM, validateAndRepairRhythm(rhythm));
 }
 
-/**
- * Safely loads custom rhythm with fallback
- */
+/** Safely loads custom rhythm with fallback. */
 export function loadCustomRhythm(): BreathRhythmConfig & { id?: string; name?: string } {
-  if (typeof localStorage === 'undefined') {
-    return { ...FACTORY_RHYTHMS.box };
-  }
-
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY_CUSTOM_RHYTHM);
-    if (!raw) {
-      return { ...FACTORY_RHYTHMS.box };
-    }
-    const parsed = JSON.parse(raw);
-    return validateAndRepairRhythm(parsed);
-  } catch {
-    return { ...FACTORY_RHYTHMS.box };
-  }
+  return validateAndRepairRhythm(readStoredJson(STORAGE_KEY_CUSTOM_RHYTHM));
 }
 
 /**
  * Resolves rhythm preset by id or alias (supporting both factory and user-defined rhythms)
  */
 export function getRhythmPreset(keyOrId: string): FactoryRhythm | UserRhythmConfig {
+  if (typeof keyOrId !== 'string') return FACTORY_RHYTHMS.box;
   if (typeof keyOrId === 'string' && Object.prototype.hasOwnProperty.call(FACTORY_RHYTHMS, keyOrId)) {
     return FACTORY_RHYTHMS[keyOrId];
   }
@@ -269,17 +251,14 @@ export const STORAGE_KEY_USER_RHYTHMS = 'synhale_user_rhythms_v1';
  * Safely loads all user custom breath rhythms from LocalStorage
  */
 export function getUserRhythms(): UserRhythmConfig[] {
-  if (typeof localStorage === 'undefined') return [];
   try {
-    const raw = localStorage.getItem(STORAGE_KEY_USER_RHYTHMS);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
+    const parsed = readStoredJson(STORAGE_KEY_USER_RHYTHMS);
+    if (!Array.isArray(parsed) || parsed.length > 100) return [];
     const results: UserRhythmConfig[] = [];
-    for (const item of parsed) {
-      if (!item || typeof item !== 'object') continue;
+    for (const [index, item] of parsed.entries()) {
+      if (!isRecord(item)) continue;
       const repaired = validateAndRepairRhythm(item);
-      const id = typeof item.id === 'string' && item.id.trim() ? item.id.trim().slice(0, 64) : `user-rhythm-${Date.now()}`;
+      const id = typeof item.id === 'string' && item.id.trim() ? item.id.trim().slice(0, 64) : `user-rhythm-recovered-${index}`;
       const name = typeof item.name === 'string' && item.name.trim() ? item.name.trim().slice(0, 64) : '自定义节律';
       const description = typeof item.description === 'string' ? item.description.trim().slice(0, 256) : undefined;
       results.push({
@@ -290,7 +269,7 @@ export function getUserRhythms(): UserRhythmConfig[] {
         holdIn: repaired.holdIn,
         exhale: repaired.exhale,
         holdOut: repaired.holdOut,
-        createdAt: typeof item.createdAt === 'number' ? item.createdAt : Date.now()
+        createdAt: typeof item.createdAt === 'number' && Number.isFinite(item.createdAt) ? item.createdAt : Date.now()
       });
     }
     return results;
@@ -306,13 +285,13 @@ export function saveUserRhythm(
   rhythm: Omit<UserRhythmConfig, 'id' | 'createdAt'> & { id?: string; createdAt?: number }
 ): UserRhythmConfig {
   const existing = getUserRhythms();
-  const rawId = rhythm.id && rhythm.id.trim() ? rhythm.id.trim() : `user-rhythm-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const rawId = typeof rhythm.id === 'string' && rhythm.id.trim() ? rhythm.id.trim() : `user-rhythm-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
   const id = rawId.slice(0, 64);
-  const rawName = rhythm.name && rhythm.name.trim() ? rhythm.name.trim() : '自定义节律';
+  const rawName = typeof rhythm.name === 'string' && rhythm.name.trim() ? rhythm.name.trim() : '自定义节律';
   const name = rawName.slice(0, 64);
   const repaired = validateAndRepairRhythm(rhythm);
   const total = Number((repaired.inhale + repaired.holdIn + repaired.exhale + repaired.holdOut).toFixed(1));
-  const rawDesc = rhythm.description && rhythm.description.trim()
+  const rawDesc = typeof rhythm.description === 'string' && rhythm.description.trim()
     ? rhythm.description.trim()
     : `自定义节律 · ${repaired.inhale}-${repaired.holdIn}-${repaired.exhale}-${repaired.holdOut} (${total}s)`;
   const description = rawDesc.slice(0, 256);
@@ -325,7 +304,7 @@ export function saveUserRhythm(
     holdIn: repaired.holdIn,
     exhale: repaired.exhale,
     holdOut: repaired.holdOut,
-    createdAt: rhythm.createdAt ?? Date.now()
+    createdAt: typeof rhythm.createdAt === 'number' && Number.isFinite(rhythm.createdAt) ? rhythm.createdAt : Date.now()
   };
 
   const index = existing.findIndex(r => r.id === id);
@@ -337,18 +316,8 @@ export function saveUserRhythm(
     updatedList = [...existing, newConfig];
   }
 
-  // Cap to maximum 100 user custom rhythms to prevent localStorage exhaustion
-  if (updatedList.length > 100) {
-    updatedList = updatedList.slice(-100);
-  }
-
-  if (typeof localStorage !== 'undefined') {
-    try {
-      localStorage.setItem(STORAGE_KEY_USER_RHYTHMS, JSON.stringify(updatedList));
-    } catch {
-      // QuotaExceeded or disabled
-    }
-  }
+  if (updatedList.length > 100) throw new Error('节律已达上限');
+  requireStoredJson(STORAGE_KEY_USER_RHYTHMS, updatedList);
 
   return newConfig;
 }
@@ -357,13 +326,5 @@ export function saveUserRhythm(
  * Deletes a user custom breath rhythm by id from LocalStorage
  */
 export function deleteUserRhythm(id: string): boolean {
-  if (typeof localStorage === 'undefined') return false;
-  try {
-    const existing = getUserRhythms();
-    const filtered = existing.filter(r => r.id !== id);
-    localStorage.setItem(STORAGE_KEY_USER_RHYTHMS, JSON.stringify(filtered));
-    return true;
-  } catch {
-    return false;
-  }
+  return writeStoredJson(STORAGE_KEY_USER_RHYTHMS, getUserRhythms().filter(r => r.id !== id));
 }

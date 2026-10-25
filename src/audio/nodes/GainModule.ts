@@ -1,3 +1,4 @@
+import { sanitizeParameterPatch } from '../dsp/parameterSafety';
 /**
  * Synhale 2 - GainModule (Precision Preamp & Soft-Clipping Protection)
  * 
@@ -108,6 +109,7 @@ export class GainModule implements AudioEffectNode {
 
   setParams(params: Partial<GainParams>): void {
     if (this.isDisposed) return;
+    params = sanitizeParameterPatch(params);
     const now = this.ctx.currentTime;
 
     if (params.value !== undefined) {
@@ -131,11 +133,6 @@ export class GainModule implements AudioEffectNode {
         this.gainNode.gain.setValueAtTime(anchorValue, now);
         // Smooth exponential transition with 25ms golden anti-zipper time constant
         this.gainNode.gain.setTargetAtTime(targetLinear, now, 0.025);
-
-        // Vitest virtual clock harness compatibility
-        if ((this.ctx as any)?.advanceTime) {
-          (this.gainNode.gain as any)._value = targetLinear;
-        }
       }
     }
 

@@ -1,3 +1,4 @@
+import { sanitizeParameterPatch } from '../dsp/parameterSafety';
 /**
  * Synhale 2 - DriveModule (4x Oversampled Soft Saturation & Auto-Makeup Gain)
  * 
@@ -83,6 +84,7 @@ export class DriveModule implements AudioEffectNode {
 
   setParams(params: Partial<EffectsChainParams['drive']>): void {
     if (this.isDisposed) return;
+    params = sanitizeParameterPatch(params);
     const now = this.ctx.currentTime;
     let curveNeedsUpdate = false;
 
@@ -95,9 +97,6 @@ export class DriveModule implements AudioEffectNode {
       this.currentParams.amount = Math.max(0, Math.min(1, params.amount));
       const makeup = computeDriveMakeupGain(this.currentParams.amount);
       this.makeupGain.gain.setTargetAtTime(makeup, now, 0.015);
-      if ((this.ctx as any)?.advanceTime) {
-        (this.makeupGain.gain as any)._value = makeup;
-      }
       curveNeedsUpdate = true;
     }
 

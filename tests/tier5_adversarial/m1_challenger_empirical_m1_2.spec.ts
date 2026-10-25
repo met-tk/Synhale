@@ -62,8 +62,9 @@ describe('EMPIRICAL CHALLENGER (M1-2): Stress-Test Visual Telemetry, Engine Stab
   // =========================================================================
   describe('Verification 1: engine.getVisualGrains() strictly returns [] when bypassed/idle and never accesses oscA', () => {
     it('strictly returns [] when Granular is bypassed even under 100 extreme OSC A parameter sweeps', () => {
-      // Setup spy on OscAChannel to detect any access to getActiveVisualGrains or properties
-      const oscAGrainsSpy = vi.spyOn(engine.oscA, 'getActiveVisualGrains');
+      // OscAChannel no longer exposes getActiveVisualGrains at all (stub removed);
+      // the absence of the method itself enforces the isolation contract.
+      expect((engine.oscA as unknown as Record<string, unknown>).getActiveVisualGrains).toBeUndefined();
 
       for (let i = 0; i < 100; i++) {
         const wtIndex = (i % 24);
@@ -92,14 +93,12 @@ describe('EMPIRICAL CHALLENGER (M1-2): Stress-Test Visual Telemetry, Engine Stab
         const visualGrains = engine.getVisualGrains();
         expect(visualGrains).toEqual([]);
         expect(visualGrains.length).toBe(0);
-
-        // Crucial: oscA must NEVER be queried for visual grains
-        expect(oscAGrainsSpy).not.toHaveBeenCalled();
       }
     });
 
     it('strictly returns [] when Granular is idle (stopped and purged), without touching oscA', () => {
-      const oscAGrainsSpy = vi.spyOn(engine.oscA, 'getActiveVisualGrains');
+      // OscAChannel does not expose getActiveVisualGrains; method absence enforces isolation.
+      expect((engine.oscA as unknown as Record<string, unknown>).getActiveVisualGrains).toBeUndefined();
 
       // Stop and purge granular channel so it has 0 active particles (idle)
       engine.granular.stop();
@@ -116,7 +115,6 @@ describe('EMPIRICAL CHALLENGER (M1-2): Stress-Test Visual Telemetry, Engine Stab
       const grains = engine.getVisualGrains();
       expect(grains).toEqual([]);
       expect(grains.length).toBe(0);
-      expect(oscAGrainsSpy).not.toHaveBeenCalled();
     });
 
     it('returns empty array if engine.granular is uninitialized or null', () => {

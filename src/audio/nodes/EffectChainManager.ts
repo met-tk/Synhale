@@ -66,7 +66,8 @@ export class EffectChainManager {
    */
   reorderEffects(newOrder: string[]): void {
     // Filter to only registered effects
-    const validOrder = newOrder.filter(id => this.effects.has(id));
+    // Repeating a node would connect its output back to its input and create feedback.
+    const validOrder = [...new Set(newOrder.filter(id => this.effects.has(id)))];
     // Append any registered effects that were omitted in newOrder
     for (const id of this.order) {
       if (!validOrder.includes(id)) {

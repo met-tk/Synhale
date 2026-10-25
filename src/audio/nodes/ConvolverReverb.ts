@@ -11,6 +11,7 @@
 
 import { EffectsChainParams, AudioEffectNode } from '../../types/audio';
 import { computeEqualPowerMix, generateSyntheticImpulseResponse } from '../dsp/syntheticReverb';
+import { sanitizeParameterPatch } from '../dsp/parameterSafety';
 
 export class ConvolverReverb implements AudioEffectNode {
   public readonly id: string;
@@ -112,6 +113,7 @@ export class ConvolverReverb implements AudioEffectNode {
 
   setParams(params: Partial<EffectsChainParams['reverb']>): void {
     if (this.isDisposed) return;
+    params = sanitizeParameterPatch(params);
     const now = this.ctx.currentTime;
 
     let irNeedsUpdate = false;
@@ -136,12 +138,6 @@ export class ConvolverReverb implements AudioEffectNode {
       this.dryGain.gain.setTargetAtTime(dry, now, 0.01);
       if (!this.isPurged) {
         this.wetGain.gain.setTargetAtTime(wet, now, 0.01);
-      }
-      if ((this.ctx as any)?.advanceTime) {
-        (this.dryGain.gain as any)._value = dry;
-        if (!this.isPurged) {
-          (this.wetGain.gain as any)._value = wet;
-        }
       }
     }
 
@@ -197,9 +193,6 @@ export class ConvolverReverb implements AudioEffectNode {
     this.wetGain.gain.cancelScheduledValues(now);
     this.wetGain.gain.setValueAtTime(0.0, now);
     this.wetGain.gain.linearRampToValueAtTime(wet, now + 0.003);
-    if ((this.ctx as any)?.advanceTime) {
-      (this.wetGain.gain as any)._value = wet;
-    }
   }
 
   getParams(): Readonly<EffectsChainParams['reverb']> {

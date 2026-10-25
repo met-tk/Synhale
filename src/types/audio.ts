@@ -40,6 +40,7 @@ export interface AudioSourceNode {
   start(when?: number): void;
   stop(when?: number): void;
   purge?(): void;
+  restore?(): void;
   dispose(): void;
   setParams(params: any): void;
   getParams(): any;
@@ -209,6 +210,7 @@ export interface OscAParams {
   unisonVoices?: number;  // 1..16 (Unison voices count, default 2)
   unisonDetune?: number;  // 0..1 (Unison spread detune amount, default 0.25)
   spread?: number;        // 0..1 (Stereo detune spread width, default 0.2)
+  blend?: number;         // 0..1 (Unison blend UI alias, default 0.7. Mirrors unison semantics for UI layer.)
 
   // Acoustic Character & Legacy (温润模拟饱和与次低音基底)
   subGain?: number;       // 0..1 (Warm sub-harmonic octave foundation)
@@ -438,6 +440,8 @@ export interface ChannelStripParams {
   drone: DroneParams;
   granular?: GranularParams;
   ambient?: AmbientSoundscapeParams;
+  instances?: Record<string, any>;
+  sourceOrder?: string[];
 }
 
 export type LfoShape = 'sine' | 'triangle' | 'sawtooth' | 'square' | 'random';
@@ -536,9 +540,11 @@ export const DEFAULT_EQ_PARAMS: EqParams = {
 
 export type LaneId = 'laneA' | 'laneB' | 'thru';
 
-export type SoundSourceId = 'oscA' | 'granular' | 'oscB' | 'drone' | 'ambient';
+export type SoundSourceType = 'oscA' | 'granular' | 'oscB' | 'drone' | 'ambient';
 
-export type SourceRouteMap = Record<SoundSourceId, LaneId>;
+export type SoundSourceId = SoundSourceType | (string & {});
+
+export type SourceRouteMap = Record<string, LaneId>;
 
 export const DEFAULT_SOURCE_ROUTES: SourceRouteMap = {
   oscA: 'laneA',
@@ -694,6 +700,8 @@ export interface AudioEngineApi {
   removeEffectFromLane?(lane: 'laneA' | 'laneB', effectId: string): void;
   reorderEffects?(order: string[]): void;
   getEffectOrder?(): string[];
+  addSoundSource?(sourceId: string, type: SoundSourceType, initialParams?: any, targetLane?: LaneId): void;
+  removeSoundSource?(sourceId: string): void;
   dispose(): void;
 }
 
@@ -850,6 +858,23 @@ export function generateNextEffectInstanceId(
     index++;
   }
   return `${moduleType}_${index}`;
+}
+
+export function getSoundSourceType(sourceId: string): SoundSourceType {
+  const base = sourceId.replace(/_[0-9]+$/, '') as SoundSourceType;
+  if (['oscA', 'granular', 'oscB', 'drone', 'ambient'].includes(base)) return base;
+  return 'oscA';
+}
+
+export function generateNextSourceInstanceId(
+  sourceType: SoundSourceType,
+  allExistingIds: string[]
+): string {
+  let index = 2;
+  while (allExistingIds.includes(`${sourceType}_${index}`)) {
+    index++;
+  }
+  return `${sourceType}_${index}`;
 }
 
 

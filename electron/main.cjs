@@ -1,5 +1,33 @@
 const { app, BrowserWindow, Menu, shell, ipcMain } = require('electron');
 const path = require('path');
+const { pathToFileURL, fileURLToPath } = require('url');
+
+const distIndexPath = path.resolve(__dirname, '../dist/index.html');
+const normalizedTargetFilePath = path.resolve(distIndexPath).toLowerCase();
+
+if (process.platform === 'win32') app.setAppUserModelId('com.synhale.app');
+
+function isTrustedPage(url) {
+  try {
+    if (!url || typeof url !== 'string') return false;
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'file:') return false;
+    // Reject injected query parameters while allowing standard hash navigation
+    if (parsed.search) return false;
+    parsed.hash = '';
+    const filePath = fileURLToPath(parsed.href);
+    return path.resolve(filePath).toLowerCase() === normalizedTargetFilePath;
+  } catch {
+    return false;
+  }
+}
+
+function getTrustedWindow(event) {
+  const sender = event.sender;
+  if (!sender || sender.isDestroyed()) return null;
+  if (event.senderFrame !== sender.mainFrame || !isTrustedPage(event.senderFrame?.url)) return null;
+  return BrowserWindow.fromWebContents(sender);
+}
 
 // Disable hardware acceleration issues on specific GPU drivers if needed,
 // but keep standard audio/video acceleration enabled.
@@ -12,8 +40,11 @@ function createWindow() {
     minWidth: 960,
     minHeight: 640,
     title: 'Synhale · 呼吸声疗数字合成器',
+    icon: path.join(__dirname, '../dist/icons/synhale-256.png'),
     backgroundColor: '#09090b',
     frame: false,
+    thickFrame: true,
+    roundedCorners: true,
     autoHideMenuBar: true,
     show: false,
     webPreferences: {
@@ -30,7 +61,6 @@ function createWindow() {
   Menu.setApplicationMenu(null);
 
   // In production or default mode, load built dist/index.html
-  const distIndexPath = path.join(__dirname, '../dist/index.html');
   win.loadFile(distIndexPath).catch((err) => {
     console.error('Failed to load dist/index.html:', err);
   });
@@ -62,24 +92,37 @@ function createWindow() {
     }
   });
 
-  // Open external links in user's default browser instead of electron window
+  // The instrument is a single local document. Never navigate it to remote content.
+  win.webContents.on('will-navigate', (event, url) => {
+    if (!isTrustedPage(url)) event.preventDefault();
+  });
+  win.webContents.on('will-frame-navigate', (event) => {
+    if (!event.isMainFrame || !isTrustedPage(event.url)) event.preventDefault();
+  });
+  win.webContents.on('will-attach-webview', (event) => event.preventDefault());
+
+  // Deny every child window, including file:, javascript: and custom protocols.
   win.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith('http:') || url.startsWith('https:')) {
-      shell.openExternal(url);
-      return { action: 'deny' };
+    try {
+      const parsed = new URL(url);
+      if (['http:', 'https:'].includes(parsed.protocol) && !parsed.username && !parsed.password) {
+        void shell.openExternal(parsed.href).catch(() => {});
+      }
+    } catch {
+      // Malformed URLs are denied as well.
     }
-    return { action: 'allow' };
+    return { action: 'deny' };
   });
 }
 
 // IPC Handlers for frameless window controls
 ipcMain.on('window-minimize', (event) => {
-  const win = BrowserWindow.fromWebContents(event.sender);
+  const win = getTrustedWindow(event);
   if (win) win.minimize();
 });
 
 ipcMain.on('window-toggle-maximize', (event) => {
-  const win = BrowserWindow.fromWebContents(event.sender);
+  const win = getTrustedWindow(event);
   if (win) {
     if (win.isMaximized()) {
       win.unmaximize();
@@ -90,12 +133,12 @@ ipcMain.on('window-toggle-maximize', (event) => {
 });
 
 ipcMain.on('window-close', (event) => {
-  const win = BrowserWindow.fromWebContents(event.sender);
+  const win = getTrustedWindow(event);
   if (win) win.close();
 });
 
 ipcMain.handle('window-is-maximized', (event) => {
-  const win = BrowserWindow.fromWebContents(event.sender);
+  const win = getTrustedWindow(event);
   return win ? win.isMaximized() : false;
 });
 
@@ -115,6 +158,10 @@ if (!gotTheLock) {
   });
 
   app.whenReady().then(() => {
+    // No microphone, camera, notifications or other device permissions are needed.
+    const { session } = require('electron');
+    session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
+    session.defaultSession.setPermissionCheckHandler(() => false);
     createWindow();
 
     app.on('activate', () => {

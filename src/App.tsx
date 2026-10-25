@@ -2,7 +2,6 @@ import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { createPortal } from 'react-dom';
 import {
   Activity,
-  Wind,
   Disc,
   Sliders,
   X,
@@ -23,10 +22,25 @@ import {
   Minus,
   Square,
   Copy,
-  Plus
+  Plus,
+  ChevronRight,
+  ArrowLeftRight
 } from 'lucide-react';
 import { ThemeProvider, useTheme } from './ui/theme';
-import { StatusCapsule } from './ui/components/capsule';
+import { CenterBreathIndicator } from './ui/components/indicator';
+import { BreathBeadStrand } from './ui/components/tracker/BreathBeadStrand';
+import {
+  loadIndicatorOpacity,
+  saveIndicatorOpacity,
+  loadIndicatorPrecision,
+  saveIndicatorPrecision,
+  type IndicatorPrecision
+} from './visuals/indicatorConfig';
+import {
+  loadCycleTrackerSettings,
+  saveCycleTrackerSettings,
+  type CycleTrackerSettings
+} from './visuals/cycleTrackerConfig';
 import { HardwareDeck } from './ui/components/deck';
 import { BottomSheetDrawer, DrawerItem } from './ui/components/drawer';
 import { SettingsModal, CustomRhythmModal } from './ui/components/settings';
@@ -36,7 +50,7 @@ import {
   type BreathCueSettings,
   type BreathTransitionNode
 } from './audio/cue/breathCueConfig';
-import { playCueSound, preloadAllCueSounds } from './audio/cue/breathCuePlayer';
+import { playCueSound, preloadAllCueSounds, stopCueSounds } from './audio/cue/breathCuePlayer';
 import { AudioEngine, DEFAULT_CHANNEL_STRIP, DEFAULT_EFFECTS_CHAIN } from './audio/engine';
 import {
   SOUND_PRESETS,
@@ -71,6 +85,7 @@ import type {
 } from './types';
 import {
   DEFAULT_PARTICLE_PARAMS,
+  DEFAULT_OSC_A_PARAMS,
   DEFAULT_GRANULAR_PARAMS,
   DEFAULT_AMBIENT_PARAMS,
   DEFAULT_EQ_PARAMS,
@@ -78,14 +93,19 @@ import {
   type AmbientSoundscapeParams,
   type LaneId,
   type SoundSourceId,
+  type SoundSourceType,
   type SourceRouteMap,
   DEFAULT_SOURCE_ROUTES,
   DEFAULT_LANE_A_ORDER,
   DEFAULT_LANE_B_ORDER,
   getEffectModuleType,
-  getDefaultEffectParams
+  getDefaultEffectParams,
+  getSoundSourceType,
+  generateNextSourceInstanceId,
+  EFFECT_MODULE_RULES
 } from './types/audio';
 import { DEFAULT_MODULATION_ROUTES } from './ui/components/deck/HardwareDeck';
+import { useModalDialog } from './ui/hooks/useModalDialog';
 
 const INITIAL_SNAPSHOT: BreathClockSnapshot = {
   isPlaying: false,
@@ -97,8 +117,14 @@ const INITIAL_SNAPSHOT: BreathClockSnapshot = {
   cycleCount: 0
 };
 
+export type DraggingModule =
+  | { kind: 'effect'; effectId: string; lane: 'laneA' | 'laneB' | 'staged'; effectName: string }
+  | { kind: 'source'; sourceId: string; sourceType: SoundSourceType; sourceName: string }
+  | null;
+
 function SynhaleApp(): React.JSX.Element {
-  const { isDark, toggleTheme } = useTheme();
+  const { isDark, toggleTheme, palette, setThemeId } = useTheme();
+  const themeBgRef = useRef<string>(palette.bg);
 
   // Engine references
   const audioEngineRef = useRef<AudioEngine | null>(null);
@@ -107,8 +133,9 @@ function SynhaleApp(): React.JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   // Synchronous state refs for requestAnimationFrame loops
-  const isUnlockedRef = useRef<boolean>(false);
   const initPromiseRef = useRef<Promise<void> | null>(null);
+  const mountedRef = useRef(false);
+  const playbackPendingRef = useRef(false);
   const isPlayingRef = useRef<boolean>(false);
   const visualPresetRef = useRef<VisualPresetId>('spacetimeWarp');
   const clockSnapshotRef = useRef<BreathClockSnapshot>(INITIAL_SNAPSHOT);
@@ -116,6 +143,7 @@ function SynhaleApp(): React.JSX.Element {
 
   // Reactive UI state
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
+  const [operationError, setOperationError] = useState<string | null>(null);
   const [clockSnapshot, setClockSnapshot] = useState<BreathClockSnapshot>(INITIAL_SNAPSHOT);
   const [visualPreset, setVisualPreset] = useState<VisualPresetId>('spacetimeWarp');
   const [isSoundDrawerOpen, setIsSoundDrawerOpen] = useState<boolean>(false);
@@ -127,9 +155,20 @@ function SynhaleApp(): React.JSX.Element {
   const [editingPreset, setEditingPreset] = useState<{ id: string; name: string } | null>(null);
   const [editingPresetName, setEditingPresetName] = useState<string>('');
   const [deletingPreset, setDeletingPreset] = useState<{ id: string; name: string } | null>(null);
-  const [channelStrip, setChannelStrip] = useState<ChannelStripParams>(
-    SOUND_PRESETS[DEFAULT_SOUND_PRESET_ID]?.channelStrip || DEFAULT_CHANNEL_STRIP
-  );
+  const [channelStrip, setChannelStrip] = useState<ChannelStripParams>(() => {
+    const initial = SOUND_PRESETS[DEFAULT_SOUND_PRESET_ID]?.channelStrip || DEFAULT_CHANNEL_STRIP;
+    const res: ChannelStripParams = {
+      ...DEFAULT_CHANNEL_STRIP,
+      ...initial,
+      oscA: { ...DEFAULT_CHANNEL_STRIP.oscA, ...(initial.oscA || {}) },
+      granular: { ...DEFAULT_GRANULAR_PARAMS, ...(DEFAULT_CHANNEL_STRIP.granular || {}), ...(initial.granular || {}) },
+      oscB: { ...DEFAULT_CHANNEL_STRIP.oscB, ...(initial.oscB || {}) },
+      drone: { ...DEFAULT_CHANNEL_STRIP.drone, ...(initial.drone || {}) },
+      ambient: { ...DEFAULT_AMBIENT_PARAMS, ...(DEFAULT_CHANNEL_STRIP.ambient || {}), ...(initial.ambient || {}) },
+      instances: {}
+    };
+    return res;
+  });
   const [effects, setEffects] = useState<EffectsChainParams>(
     SOUND_PRESETS[DEFAULT_SOUND_PRESET_ID]?.effects || DEFAULT_EFFECTS_CHAIN
   );
@@ -143,13 +182,30 @@ function SynhaleApp(): React.JSX.Element {
   laneAOrderRef.current = laneAOrder;
   const laneBOrderRef = useRef<string[]>(laneBOrder);
   laneBOrderRef.current = laneBOrder;
+  const soundStateRef = useRef({ channelStrip, effects, modulationRoutes });
+  soundStateRef.current = { channelStrip, effects, modulationRoutes };
+
   const [isDeckOpen, setIsDeckOpen] = useState<boolean>(false);
+  const [draggingModule, setDraggingModule] = useState<DraggingModule>(null);
+  const [stagedEffectIds, setStagedEffectIds] = useState<string[]>([]);
+  const [activeSources, setActiveSources] = useState<string[]>([
+    'oscA', 'granular', 'oscB', 'drone', 'ambient'
+  ]);
+  const [hoveredHudBay, setHoveredHudBay] = useState<string | null>(null);
   const [isRhythmDrawerOpen, setIsRhythmDrawerOpen] = useState<boolean>(false);
   const [activeRhythmKey, setActiveRhythmKey] = useState<string>('box');
   const [userRhythms, setUserRhythms] = useState<UserRhythmConfig[]>(() => getUserRhythms());
   const [isCustomRhythmModalOpen, setIsCustomRhythmModalOpen] = useState<boolean>(false);
   const [editingRhythm, setEditingRhythm] = useState<UserRhythmConfig | null>(null);
   const [deletingRhythm, setDeletingRhythm] = useState<{ id: string; name: string } | null>(null);
+  const saveDialogRef = useModalDialog(isSavePresetModalOpen, () => setIsSavePresetModalOpen(false));
+  const renameDialogRef = useModalDialog(!!editingPreset, () => setEditingPreset(null));
+  const deletePresetDialogRef = useModalDialog(!!deletingPreset, () => setDeletingPreset(null));
+  const deleteRhythmDialogRef = useModalDialog(!!deletingRhythm, () => setDeletingRhythm(null));
+
+  useEffect(() => {
+    setOperationError(null);
+  }, [isSavePresetModalOpen, editingPreset, deletingPreset, deletingRhythm]);
 
   // Settings & Breath Cue State
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState<boolean>(false);
@@ -163,6 +219,31 @@ function SynhaleApp(): React.JSX.Element {
     saveCueSettings(newSettings);
   }, []);
 
+  // Central Breath Indicator Opacity (0..100, default 20% softest)
+  const [indicatorOpacity, setIndicatorOpacity] = useState<number>(() => loadIndicatorOpacity());
+  const handleIndicatorOpacityChange = useCallback((newOpacity: number) => {
+    setIndicatorOpacity(newOpacity);
+    saveIndicatorOpacity(newOpacity);
+  }, []);
+
+  // Central Breath Indicator Precision ('decimal' | 'integer')
+  const [indicatorPrecision, setIndicatorPrecision] = useState<IndicatorPrecision>(() => loadIndicatorPrecision());
+  const handleIndicatorPrecisionChange = useCallback((newPrecision: IndicatorPrecision) => {
+    setIndicatorPrecision(newPrecision);
+    saveIndicatorPrecision(newPrecision);
+  }, []);
+
+  // Breath Cycle Bead Strand (ambient number-free cycle progress, left edge of the stage)
+  const [cycleTrackerSettings, setCycleTrackerSettings] = useState<CycleTrackerSettings>(() => loadCycleTrackerSettings());
+  const cycleTrackerRef = useRef<CycleTrackerSettings>(cycleTrackerSettings);
+  cycleTrackerRef.current = cycleTrackerSettings;
+
+  const handleCycleTrackerSettingsChange = useCallback((newSettings: CycleTrackerSettings) => {
+    setCycleTrackerSettings(newSettings);
+    cycleTrackerRef.current = newSettings;
+    saveCycleTrackerSettings(newSettings);
+  }, []);
+
   // Desktop Native Frameless Window State
   const [isElectronApp, setIsElectronApp] = useState<boolean>(() => {
     return typeof window !== 'undefined' && !!(window as any).electronAPI;
@@ -173,11 +254,14 @@ function SynhaleApp(): React.JSX.Element {
     const api = (window as any).electronAPI;
     if (api) {
       setIsElectronApp(true);
-      api.isMaximized().then((max: boolean) => setIsMaximized(max));
+      api.isMaximized().then((max: boolean) => {
+        if (mountedRef.current) setIsMaximized(max);
+      }).catch(() => {});
       const unsub = api.onMaximizeChange((max: boolean) => {
+        if (!mountedRef.current) return;
         setIsMaximized(max);
         requestAnimationFrame(() => {
-          if (canvasRef.current) {
+          if (mountedRef.current && canvasRef.current) {
             const ctx = canvasRef.current.getContext('2d');
             if (ctx) setupCanvasDPI(canvasRef.current, ctx);
           }
@@ -196,16 +280,38 @@ function SynhaleApp(): React.JSX.Element {
     return () => window.removeEventListener('contextmenu', handleContextMenu);
   }, []);
 
+  // Defensive global safety net: ensure dragging state is cleared on dragend or drop
+  useEffect(() => {
+    const handleGlobalDragEnd = () => {
+      setDraggingModule(null);
+      setHoveredHudBay(null);
+    };
+    window.addEventListener('dragend', handleGlobalDragEnd);
+    window.addEventListener('drop', handleGlobalDragEnd);
+    return () => {
+      window.removeEventListener('dragend', handleGlobalDragEnd);
+      window.removeEventListener('drop', handleGlobalDragEnd);
+    };
+  }, []);
+
   // Keep refs in sync
   isDarkRef.current = isDark;
+  themeBgRef.current = palette.bg;
   visualPresetRef.current = visualPreset;
   isPlayingRef.current = isPlaying;
 
+  // 0ms Hard Cut pause shared by the manual toggle & the bead-strand session conclusion
+  const pausePlaybackNow = useCallback(() => {
+    stopCueSounds(audioEngineRef.current?.getContext());
+    audioEngineRef.current?.executeZeroResidueHardCut();
+    breathEngineRef.current?.pause();
+    isPlayingRef.current = false;
+    setIsPlaying(false);
+  }, []);
+
   // 1. Initialize Breath Engine & Master Clock Subscriber
   useEffect(() => {
-    // Preload natural sound cues in background for zero-latency initial audition
-    preloadAllCueSounds();
-
+    mountedRef.current = true;
     const breathEngine = new BreathEngine({
       rhythm: FACTORY_RHYTHMS.box,
       autoStart: false
@@ -253,16 +359,28 @@ function SynhaleApp(): React.JSX.Element {
       }
     });
 
+    // Auto-conclude the session when the bead strand fills: soft pause
+    const unsubCycle = breathEngine.onCycleComplete((count) => {
+      if (count >= cycleTrackerRef.current.capacity) {
+        pausePlaybackNow();
+      }
+    });
+
     return () => {
+      mountedRef.current = false;
       unsubscribe();
       unsubStage();
+      unsubCycle();
       breathEngine.dispose();
       canvasRenderer.stop();
       if (audioEngineRef.current) {
+        stopCueSounds(audioEngineRef.current.getContext());
         audioEngineRef.current.dispose();
+        audioEngineRef.current = null;
       }
+      breathEngineRef.current = null;
     };
-  }, []);
+  }, [pausePlaybackNow]);
 
   // 2. Initialize Canvas Render Loop
   useEffect(() => {
@@ -307,13 +425,19 @@ function SynhaleApp(): React.JSX.Element {
 
     // 3. Screen display resolution / DPR change listener
     let dprMediaQuery: MediaQueryList | null = null;
-    const handleDprChange = () => updateDPI();
-    if (typeof window !== 'undefined' && window.matchMedia) {
+    const handleDprChange = () => {
+      updateDPI();
+      watchDpr();
+    };
+    const watchDpr = () => {
+      dprMediaQuery?.removeEventListener?.('change', handleDprChange);
+      if (!window.matchMedia) return;
       dprMediaQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
       if (typeof dprMediaQuery.addEventListener === 'function') {
         dprMediaQuery.addEventListener('change', handleDprChange);
       }
-    }
+    };
+    watchDpr();
 
     renderer.start(canvas, () => {
       const snapshot = clockSnapshotRef.current;
@@ -326,6 +450,7 @@ function SynhaleApp(): React.JSX.Element {
         stage: snapshot.currentStage,
         stageProgress: snapshot.stageProgress,
         isDarkTheme: isDarkRef.current,
+        background: themeBgRef.current,
         preset: visualPresetRef.current,
         oscAActivity: isPlayingRef.current ? 0.8 : 0.0,
         oscBActivity: isPlayingRef.current ? 0.6 : 0.0,
@@ -356,11 +481,20 @@ function SynhaleApp(): React.JSX.Element {
         if (!audioEngineRef.current) {
           const engine = new AudioEngine();
           audioEngineRef.current = engine;
-          await engine.init();
+          await engine.init({ muted: true });
+          if (!mountedRef.current || audioEngineRef.current !== engine) {
+            engine.dispose();
+            return;
+          }
           // Mute master output and set initial hard cut state to load preset in silence without DAC click
           engine.executeZeroResidueHardCut();
-          engine.setModulationRoutes(DEFAULT_MODULATION_ROUTES);
-          engine.loadSoundPreset(activeSoundPresetKey);
+          const current = soundStateRef.current;
+          engine.loadSoundPreset({
+            ...getSoundPresetById(DEFAULT_SOUND_PRESET_ID),
+            channelStrip: current.channelStrip,
+            effects: current.effects,
+            modulationRoutes: current.modulationRoutes
+          });
           if (sourceRoutesRef.current) {
             for (const [srcId, lane] of Object.entries(sourceRoutesRef.current)) {
               engine.setSourceRoute(srcId as SoundSourceId, lane as LaneId);
@@ -368,18 +502,21 @@ function SynhaleApp(): React.JSX.Element {
           }
           if (laneAOrderRef.current) engine.reorderLaneEffects('laneA', laneAOrderRef.current);
           if (laneBOrderRef.current) engine.reorderLaneEffects('laneB', laneBOrderRef.current);
+          preloadAllCueSounds(engine.getContext());
         }
-        if (!isUnlockedRef.current) {
-          await audioEngineRef.current.resume();
-          isUnlockedRef.current = true;
-        }
-      } finally {
-        initPromiseRef.current = null;
+      } catch (error) {
+        audioEngineRef.current?.dispose();
+        audioEngineRef.current = null;
+        throw error;
       }
     })();
     initPromiseRef.current = initTask;
-    return initTask;
-  }, [activeSoundPresetKey]);
+    try {
+      await initTask;
+    } finally {
+      if (initPromiseRef.current === initTask) initPromiseRef.current = null;
+    }
+  }, []);
 
   const handleModulationRouteAssign = useCallback((knobId: string, route: ModulationRoute | null) => {
     setModulationRoutes(prev => {
@@ -398,30 +535,34 @@ function SynhaleApp(): React.JSX.Element {
 
   // 4. Play / Pause Toggle with 0ms Hard Cut
   const togglePlayPause = useCallback(async () => {
-    await ensureAudioInitialized();
-
-    const breathEngine = breathEngineRef.current;
-    const audioEngine = audioEngineRef.current;
-    if (!breathEngine) return;
-
     if (isPlayingRef.current) {
-      // 0ms Hard Cut
-      if (audioEngine) {
-        audioEngine.executeZeroResidueHardCut();
-      }
-      breathEngine.pause();
-      isPlayingRef.current = false;
-      setIsPlaying(false);
-    } else {
-      // Seamless Resume
-      if (audioEngine) {
-        await audioEngine.resume();
+      pausePlaybackNow();
+      return;
+    }
+    if (playbackPendingRef.current) return;
+    playbackPendingRef.current = true;
+    setOperationError(null);
+    try {
+      await ensureAudioInitialized();
+      const audioEngine = audioEngineRef.current;
+      const breathEngine = breathEngineRef.current;
+      if (!mountedRef.current || !audioEngine || !breathEngine) return;
+      await audioEngine.resume();
+      if (!mountedRef.current || audioEngineRef.current !== audioEngine) return;
+      // Bead strand full: begin a fresh session (beads cleared, back to inhale start)
+      if (breathEngine.getSnapshot().cycleCount >= cycleTrackerRef.current.capacity) {
+        breathEngine.stop();
       }
       breathEngine.resume();
       isPlayingRef.current = true;
       setIsPlaying(true);
+    } catch {
+      audioEngineRef.current?.executeZeroResidueHardCut();
+      if (mountedRef.current) setOperationError('音频启动失败，请检查设备');
+    } finally {
+      playbackPendingRef.current = false;
     }
-  }, [ensureAudioInitialized]);
+  }, [ensureAudioInitialized, pausePlaybackNow]);
 
   // 5. Canvas Tap Handlers (Constrained to central breathing geometry area)
   const pointerHandlers = useMemo(() => {
@@ -429,9 +570,7 @@ function SynhaleApp(): React.JSX.Element {
       () => {
         togglePlayPause();
       },
-      async () => {
-        await ensureAudioInitialized();
-      },
+      undefined,
       (e) => {
         if (!canvasRef.current) return true;
         const parent = canvasRef.current.parentElement;
@@ -474,7 +613,18 @@ function SynhaleApp(): React.JSX.Element {
               ...(prev.ambient ?? DEFAULT_AMBIENT_PARAMS),
               ...params.ambient
             } as AmbientSoundscapeParams)
-          : prev.ambient
+          : prev.ambient,
+        instances: params.instances
+          ? {
+              ...(prev.instances || {}),
+              ...Object.fromEntries(
+                Object.entries(params.instances).map(([key, val]) => [
+                  key,
+                  { ...(prev.instances?.[key] || {}), ...val }
+                ])
+              )
+            }
+          : prev.instances
       };
       if (audioEngineRef.current) {
         audioEngineRef.current.updateChannelStrip(next);
@@ -678,31 +828,26 @@ function SynhaleApp(): React.JSX.Element {
 
   const handleMoveEffectBetweenLanes = useCallback((effectId: string, fromOrTarget: string, maybeTarget?: string) => {
     const targetLane: 'laneA' | 'laneB' = (maybeTarget || fromOrTarget) as 'laneA' | 'laneB';
-    let nextA: string[] = [];
-    let nextB: string[] = [];
+    // Compute nextA/nextB synchronously from ref state to avoid stale
+    // closure reads. Previous implementation captured nextA/nextB through
+    // setState updaters and then read them in setEffects(...) — that relied
+    // on updater call ordering and broke under React 18 batching / Strict
+    // Mode double-invoke semantics.
+    const currentA = laneAOrderRef.current;
+    const currentB = laneBOrderRef.current;
+    let nextA: string[];
+    let nextB: string[];
     if (targetLane === 'laneA') {
-      setLaneBOrder(prev => {
-        nextB = prev.filter(id => id !== effectId);
-        laneBOrderRef.current = nextB;
-        return nextB;
-      });
-      setLaneAOrder(prev => {
-        nextA = prev.includes(effectId) ? prev : [...prev, effectId];
-        laneAOrderRef.current = nextA;
-        return nextA;
-      });
+      nextB = currentB.filter(id => id !== effectId);
+      nextA = currentA.includes(effectId) ? currentA : [...currentA, effectId];
     } else {
-      setLaneAOrder(prev => {
-        nextA = prev.filter(id => id !== effectId);
-        laneAOrderRef.current = nextA;
-        return nextA;
-      });
-      setLaneBOrder(prev => {
-        nextB = prev.includes(effectId) ? prev : [...prev, effectId];
-        laneBOrderRef.current = nextB;
-        return nextB;
-      });
+      nextA = currentA.filter(id => id !== effectId);
+      nextB = currentB.includes(effectId) ? currentB : [...currentB, effectId];
     }
+    laneAOrderRef.current = nextA;
+    laneBOrderRef.current = nextB;
+    setLaneAOrder(nextA);
+    setLaneBOrder(nextB);
     setEffects(prev => ({
       ...prev,
       laneAOrder: nextA,
@@ -713,65 +858,184 @@ function SynhaleApp(): React.JSX.Element {
     }
   }, []);
 
-  const handleAddEffectToLane = useCallback((lane: 'laneA' | 'laneB', effectId: string) => {
-    let nextA: string[] | null = null;
-    let nextB: string[] | null = null;
+  const handleAddEffectToLane = useCallback((lane: 'laneA' | 'laneB', effectId: string, index?: number) => {
+    const currentA = laneAOrderRef.current;
+    const currentB = laneBOrderRef.current;
+    let nextA: string[];
+    let nextB: string[];
+
     if (lane === 'laneA') {
-      setLaneAOrder(prev => {
-        nextA = prev.includes(effectId) ? prev : [...prev, effectId];
-        laneAOrderRef.current = nextA;
-        return nextA;
-      });
-      setLaneBOrder(prev => {
-        nextB = prev.filter(id => id !== effectId);
-        laneBOrderRef.current = nextB;
-        return nextB;
-      });
+      const filteredA = currentA.filter(id => id !== effectId);
+      if (index === undefined || index >= filteredA.length) {
+        nextA = [...filteredA, effectId];
+      } else {
+        nextA = [...filteredA];
+        nextA.splice(Math.max(0, index), 0, effectId);
+      }
+      nextB = currentB.filter(id => id !== effectId);
     } else {
-      setLaneBOrder(prev => {
-        nextB = prev.includes(effectId) ? prev : [...prev, effectId];
-        laneBOrderRef.current = nextB;
-        return nextB;
-      });
-      setLaneAOrder(prev => {
-        nextA = prev.filter(id => id !== effectId);
-        laneAOrderRef.current = nextA;
-        return nextA;
-      });
+      const filteredB = currentB.filter(id => id !== effectId);
+      if (index === undefined || index >= filteredB.length) {
+        nextB = [...filteredB, effectId];
+      } else {
+        nextB = [...filteredB];
+        nextB.splice(Math.max(0, index), 0, effectId);
+      }
+      nextA = currentA.filter(id => id !== effectId);
     }
+
+    laneAOrderRef.current = nextA;
+    laneBOrderRef.current = nextB;
+    setLaneAOrder(nextA);
+    setLaneBOrder(nextB);
+
     const baseType = getEffectModuleType(effectId);
     const initialParams = getDefaultEffectParams(baseType);
 
     setEffects(prev => ({
       ...prev,
-      ...(nextA ? { laneAOrder: nextA } : {}),
-      ...(nextB ? { laneBOrder: nextB } : {}),
+      laneAOrder: nextA,
+      laneBOrder: nextB,
       instances: {
         ...(prev.instances || {}),
         [effectId]: (prev.instances && prev.instances[effectId]) ? prev.instances[effectId] : initialParams
       }
     }));
     if (audioEngineRef.current?.addEffectToLane) {
-      audioEngineRef.current.addEffectToLane(lane, effectId);
+      audioEngineRef.current.addEffectToLane(lane, effectId, index);
     }
   }, []);
 
+  const handleStageEffect = useCallback((effectId: string, fromLane: 'laneA' | 'laneB' | 'staged') => {
+    if (fromLane === 'laneA') {
+      const nextA = laneAOrderRef.current.filter(id => id !== effectId);
+      laneAOrderRef.current = nextA;
+      setLaneAOrder(nextA);
+      setEffects(e => ({ ...e, laneAOrder: nextA }));
+      audioEngineRef.current?.removeEffectFromLane?.('laneA', effectId);
+    } else if (fromLane === 'laneB') {
+      const nextB = laneBOrderRef.current.filter(id => id !== effectId);
+      laneBOrderRef.current = nextB;
+      setLaneBOrder(nextB);
+      setEffects(e => ({ ...e, laneBOrder: nextB }));
+      audioEngineRef.current?.removeEffectFromLane?.('laneB', effectId);
+    }
+    setStagedEffectIds(prev => (prev.includes(effectId) ? prev : [...prev, effectId]));
+    setDraggingModule(null);
+  }, []);
+
+  const handleUnstageEffect = useCallback((effectId: string, targetLane: 'laneA' | 'laneB', targetIndex?: number) => {
+    setStagedEffectIds(prev => prev.filter(id => id !== effectId));
+    handleAddEffectToLane(targetLane, effectId, targetIndex);
+    setDraggingModule(null);
+  }, [handleAddEffectToLane]);
+
+  const handleDuplicateSource = useCallback((sourceId: string) => {
+    const sourceType = getSoundSourceType(sourceId);
+    const newId = generateNextSourceInstanceId(sourceType, activeSources);
+
+    // Assemble complete fallback defaults for the source type to guarantee full parameter integrity
+    let baseDefaults: any = {};
+    switch (sourceType) {
+      case 'oscA':
+        baseDefaults = { ...DEFAULT_OSC_A_PARAMS, ...DEFAULT_CHANNEL_STRIP.oscA };
+        break;
+      case 'granular':
+        baseDefaults = { ...DEFAULT_GRANULAR_PARAMS, ...DEFAULT_CHANNEL_STRIP.granular };
+        break;
+      case 'oscB':
+        baseDefaults = { ...DEFAULT_CHANNEL_STRIP.oscB };
+        break;
+      case 'drone':
+        baseDefaults = { ...DEFAULT_CHANNEL_STRIP.drone };
+        break;
+      case 'ambient':
+        baseDefaults = { ...DEFAULT_AMBIENT_PARAMS, ...DEFAULT_CHANNEL_STRIP.ambient };
+        break;
+    }
+
+    const existingParams = channelStrip.instances?.[sourceId] || (channelStrip as any)[sourceType] || {};
+    const fullSourceParams = {
+      ...baseDefaults,
+      ...existingParams
+    };
+
+    let clonedParams: any;
+    try {
+      clonedParams = structuredClone(fullSourceParams);
+    } catch (err) {
+      console.warn('App.handleDuplicateSource: structuredClone failed, falling back to spread clone', err);
+      clonedParams = { ...fullSourceParams };
+    }
+    const currentRoute = sourceRoutes[sourceId] || 'laneA';
+
+    if (audioEngineRef.current?.addSoundSource) {
+      audioEngineRef.current.addSoundSource(newId, sourceType, clonedParams, currentRoute);
+    }
+
+    setActiveSources(prev => {
+      const idx = prev.indexOf(sourceId);
+      if (idx !== -1) {
+        const next = [...prev];
+        next.splice(idx + 1, 0, newId);
+        return next;
+      }
+      return [...prev, newId];
+    });
+    setSourceRoutes(prev => {
+      const next = { ...prev, [newId]: currentRoute };
+      sourceRoutesRef.current = next;
+      return next;
+    });
+    setChannelStrip(prev => ({
+      ...prev,
+      instances: {
+        ...(prev.instances || {}),
+        [newId]: clonedParams
+      }
+    }));
+    setDraggingModule(null);
+  }, [activeSources, channelStrip, sourceRoutes]);
+
+  const handleDeleteSource = useCallback((sourceId: string) => {
+    if (activeSources.length <= 1) {
+      setOperationError('至少保留一个发生器');
+      setDraggingModule(null);
+      return;
+    }
+
+    if (audioEngineRef.current?.removeSoundSource) {
+      audioEngineRef.current.removeSoundSource(sourceId);
+    }
+
+    setActiveSources(prev => prev.filter(id => id !== sourceId));
+    setSourceRoutes(prev => {
+      const next = { ...prev };
+      delete next[sourceId as SoundSourceId];
+      sourceRoutesRef.current = next;
+      return next;
+    });
+    setChannelStrip(prev => {
+      const nextInstances = { ...(prev.instances || {}) };
+      delete nextInstances[sourceId];
+      return {
+        ...prev,
+        instances: nextInstances
+      };
+    });
+    setDraggingModule(null);
+  }, [activeSources]);
+
   const handleRemoveEffectFromLane = useCallback((lane: 'laneA' | 'laneB', effectId: string) => {
     if (lane === 'laneA') {
-      let next: string[] = [];
-      setLaneAOrder(prev => {
-        next = prev.filter(id => id !== effectId);
-        laneAOrderRef.current = next;
-        return next;
-      });
+      const next = laneAOrderRef.current.filter(id => id !== effectId);
+      laneAOrderRef.current = next;
+      setLaneAOrder(next);
       setEffects(e => ({ ...e, laneAOrder: next }));
     } else {
-      let next: string[] = [];
-      setLaneBOrder(prev => {
-        next = prev.filter(id => id !== effectId);
-        laneBOrderRef.current = next;
-        return next;
-      });
+      const next = laneBOrderRef.current.filter(id => id !== effectId);
+      laneBOrderRef.current = next;
+      setLaneBOrder(next);
       setEffects(e => ({ ...e, laneBOrder: next }));
     }
     if (audioEngineRef.current?.removeEffectFromLane) {
@@ -782,11 +1046,11 @@ function SynhaleApp(): React.JSX.Element {
   // 7. Rhythm Presets Drawer (5 Canonical Factory + User Custom Rhythms)
   const rhythmDrawerItems: DrawerItem[] = useMemo(() => {
     const factoryItems: DrawerItem[] = [
-      { id: 'box', label: 'Box 4-4-4-4', description: '四方平衡呼吸 · 战术清醒与心理减压 (4-4-4-4)', badge: '16s' },
-      { id: 'sleep', label: 'Relax 4-7-8', description: '助眠放松呼吸 · 延长呼气与神经松弛 (4-7-8)', badge: '19s' },
-      { id: 'coherent', label: 'Coherent 5.5s', description: '心率共振呼吸 · 0.1Hz 自律神经调和 (5.5s)', badge: '11s' },
-      { id: 'prana', label: 'Prana Energize', description: '能量唤醒呼吸 · 快速充氧与提神活血 (4-4-2-0)', badge: '10s' },
-      { id: 'calm', label: 'Deep Calm', description: '深层宁静呼吸 · 颂钵声疗与冥想入定 (4-2-6-2)', badge: '14s' }
+      { id: 'box', label: 'Box 4-4-4-4', description: '战术清醒 · 心理减压', badge: '16s' },
+      { id: 'sleep', label: 'Relax 4-7-8', description: '延长呼气 · 助眠松弛', badge: '19s' },
+      { id: 'coherent', label: 'Coherent 5.5s', description: '0.1Hz 心率共振', badge: '11s' },
+      { id: 'prana', label: 'Prana Energize', description: '快速充氧 · 提神唤醒', badge: '10s' },
+      { id: 'calm', label: 'Deep Calm', description: '颂钵声疗 · 冥想入定', badge: '14s' }
     ];
 
     const userItems: DrawerItem[] = userRhythms.map(r => {
@@ -836,7 +1100,10 @@ function SynhaleApp(): React.JSX.Element {
 
   const handleConfirmDeleteRhythm = useCallback(() => {
     if (!deletingRhythm) return;
-    deleteUserRhythm(deletingRhythm.id);
+    if (!deleteUserRhythm(deletingRhythm.id)) {
+      setOperationError('删除失败，存储不可用');
+      return;
+    }
     const updated = getUserRhythms();
     setUserRhythms(updated);
     if (activeRhythmKey === deletingRhythm.id) {
@@ -859,13 +1126,13 @@ function SynhaleApp(): React.JSX.Element {
     const factory = getAllFactoryPresets().map(p => ({
       id: p.id,
       label: p.name,
-      description: `${p.description} (${p.nameEn})`,
+      description: p.description,
       badge: p.badge
     }));
     const user = customPresets.map(p => ({
       id: p.id,
       label: p.name,
-      description: `${p.description} (${p.nameEn})`,
+      description: p.description,
       badge: '用户预设',
       onEdit: (id: string, e: React.MouseEvent) => {
         e.stopPropagation();
@@ -939,18 +1206,15 @@ function SynhaleApp(): React.JSX.Element {
       setEffects(mergedEffects);
       const nextRoutes = preset.modulationRoutes ? { ...preset.modulationRoutes } : { ...DEFAULT_MODULATION_ROUTES };
       setModulationRoutes(nextRoutes);
-      if (preset.effects?.sourceRoutes) {
-        setSourceRoutes(preset.effects.sourceRoutes);
-        sourceRoutesRef.current = preset.effects.sourceRoutes;
-      }
-      if (preset.effects?.laneAOrder) {
-        setLaneAOrder(preset.effects.laneAOrder);
-        laneAOrderRef.current = preset.effects.laneAOrder;
-      }
-      if (preset.effects?.laneBOrder) {
-        setLaneBOrder(preset.effects.laneBOrder);
-        laneBOrderRef.current = preset.effects.laneBOrder;
-      }
+      const nextSourceRoutes = preset.effects?.sourceRoutes ?? { ...DEFAULT_SOURCE_ROUTES };
+      const nextLaneAOrder = preset.effects?.laneAOrder ?? [...DEFAULT_LANE_A_ORDER];
+      const nextLaneBOrder = preset.effects?.laneBOrder ?? [...DEFAULT_LANE_B_ORDER];
+      setSourceRoutes(nextSourceRoutes);
+      sourceRoutesRef.current = nextSourceRoutes;
+      setLaneAOrder(nextLaneAOrder);
+      laneAOrderRef.current = nextLaneAOrder;
+      setLaneBOrder(nextLaneBOrder);
+      laneBOrderRef.current = nextLaneBOrder;
 
       if (audioEngineRef.current) {
         audioEngineRef.current.loadSoundPreset({
@@ -973,34 +1237,43 @@ function SynhaleApp(): React.JSX.Element {
 
   const handleSavePreset = (e: React.FormEvent) => {
     e.preventDefault();
-    if (saveMode === 'overwrite' && isCurrentUserPreset) {
-      updateUserPreset(activeSoundPresetKey, {
+    setOperationError(null);
+    try {
+      if (saveMode === 'overwrite' && isCurrentUserPreset) {
+        const updated = updateUserPreset(activeSoundPresetKey, {
+          channelStrip,
+          effects,
+          modulationRoutes
+        });
+        if (!updated) throw new Error('保存失败，存储不可用');
+        setCustomPresets(getUserPresets());
+        setIsSavePresetModalOpen(false);
+        return;
+      }
+
+      if (!newPresetName.trim()) return;
+      const saved = saveUserPreset({
+        name: newPresetName.trim(),
         channelStrip,
         effects,
         modulationRoutes
       });
       setCustomPresets(getUserPresets());
+      setActiveSoundPresetKey(saved.id);
+      setNewPresetName('');
       setIsSavePresetModalOpen(false);
-      return;
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : '保存失败，请稍后重试。');
     }
-
-    if (!newPresetName.trim()) return;
-    const saved = saveUserPreset({
-      name: newPresetName.trim(),
-      channelStrip,
-      effects,
-      modulationRoutes
-    });
-    setCustomPresets(getUserPresets());
-    setActiveSoundPresetKey(saved.id);
-    setNewPresetName('');
-    setIsSavePresetModalOpen(false);
   };
 
   const handleConfirmRename = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingPreset || !editingPresetName.trim()) return;
-    renameUserPreset(editingPreset.id, editingPresetName.trim());
+    if (!renameUserPreset(editingPreset.id, editingPresetName.trim())) {
+      setOperationError('重命名失败，存储不可用');
+      return;
+    }
     setCustomPresets(getUserPresets());
     setEditingPreset(null);
   };
@@ -1008,7 +1281,10 @@ function SynhaleApp(): React.JSX.Element {
   const handleConfirmDelete = () => {
     if (!deletingPreset) return;
     const idToDelete = deletingPreset.id;
-    deleteUserPreset(idToDelete);
+    if (!deleteUserPreset(idToDelete)) {
+      setOperationError('删除失败，存储不可用');
+      return;
+    }
     const updated = getUserPresets();
     setCustomPresets(updated);
     if (activeSoundPresetKey === idToDelete) {
@@ -1063,6 +1339,24 @@ function SynhaleApp(): React.JSX.Element {
     }
   ], []);
 
+  // Floating Micro-HUD Tooltip for tactile visual preset dock
+  const [activeVisualHint, setActiveVisualHint] = useState<{ labelZh: string; label: string } | null>(null);
+  const visualHintTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  const triggerVisualHint = useCallback((labelZh: string, label: string) => {
+    if (visualHintTimerRef.current) clearTimeout(visualHintTimerRef.current);
+    setActiveVisualHint({ labelZh, label });
+    visualHintTimerRef.current = setTimeout(() => {
+      setActiveVisualHint(null);
+    }, 1600);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (visualHintTimerRef.current) clearTimeout(visualHintTimerRef.current);
+    };
+  }, []);
+
   const [visualGroupIndex, setVisualGroupIndex] = useState<0 | 1 | 2>(2);
   const [capsuleDragX, setCapsuleDragX] = useState<number>(0);
   const capsuleSwipeRef = useRef<{
@@ -1095,6 +1389,18 @@ function SynhaleApp(): React.JSX.Element {
       return nextGroupIdx;
     });
   }, [visualPresetGroups]);
+
+  const handleNextVisualPreset = useCallback(() => {
+    const allPresets = visualPresetGroups.flatMap(g => g.items);
+    const currentIndex = allPresets.findIndex(p => p.id === visualPresetRef.current);
+    const nextIndex = (currentIndex + 1) % allPresets.length;
+    const nextPreset = allPresets[nextIndex];
+    const targetGroupIdx = Math.floor(nextIndex / 4) as 0 | 1 | 2;
+
+    setVisualGroupIndex(targetGroupIdx);
+    setVisualPreset(nextPreset.id);
+    triggerVisualHint(nextPreset.labelZh, nextPreset.label);
+  }, [visualPresetGroups, triggerVisualHint]);
 
   // Synchronize default preset on mount to Cosmic Group III ('spacetimeWarp')
   useEffect(() => {
@@ -1150,18 +1456,41 @@ function SynhaleApp(): React.JSX.Element {
     }
   }, [switchVisualGroup, visualGroupIndex]);
 
+  // Mobile deck fit-to-width: the 900px hardware rail is zoomed down to the
+  // viewport so the whole console is visible at a glance; native pinch-zoom
+  // remains available for detail work. Floor of 0.36 keeps text above the
+  // legibility cliff — narrower devices pan the remainder instead.
+  useEffect(() => {
+    if (!isDeckOpen) return;
+    const applyFitZoom = () => {
+      // Measure the drawer's clientWidth (excludes the vertical scrollbar) so
+      // the zoomed rail fills the true usable width on every device.
+      const drawer = document.querySelector('.synhale-deck-scope');
+      const available = (drawer ? drawer.clientWidth : window.innerWidth) - 32; // p-4 both sides
+      const fit = Math.min(1, Math.max(0.36, available / 900));
+      document.documentElement.style.setProperty('--deck-fit-zoom', String(fit));
+    };
+    applyFitZoom();
+    window.addEventListener('resize', applyFitZoom);
+    return () => window.removeEventListener('resize', applyFitZoom);
+  }, [isDeckOpen]);
+
   return (
-    <div className={`relative w-screen h-screen overflow-hidden flex flex-col font-sans select-none antialiased ${
-      isDark ? 'bg-[#09090b] text-slate-100' : 'bg-[#fcfbf9] text-neutral-800'
-    } ${isElectronApp && !isMaximized ? 'border border-neutral-800/80 rounded-xl shadow-2xl' : ''}`}>
-      {/* 1. Header Navigation Bar (Frameless Desktop Draggable Titlebar) */}
-      <header className={`h-12 border-b px-5 flex items-center justify-between z-10 backdrop-blur-md transition-colors titlebar-drag ${
-        isDark
-          ? 'border-neutral-800/80 bg-[#121418]/70 text-slate-200'
-          : 'border-neutral-200/80 bg-white/75 text-neutral-800 shadow-sm'
-      }`}>
-        {/* Brand & 432Hz Indicator (titlebar-no-drag) */}
-        <div className="flex items-center gap-3 titlebar-no-drag">
+    <div
+      style={{ backgroundColor: 'var(--synhale-bg)' }}
+      className={`relative w-screen h-screen max-md:h-dvh overflow-hidden flex flex-col font-sans select-none antialiased ${
+        isDark ? 'text-slate-100' : 'text-neutral-800'
+      } ${isElectronApp && !isMaximized ? 'ring-1 ring-inset ring-neutral-300 dark:ring-neutral-800/80' : ''}`}>
+      {/* 1. Header Navigation Bar (Finalized Three-Anchor Header with Layout 1 Independent Modules) */}
+      <header
+        style={{ backgroundColor: 'var(--synhale-header-bg)' }}
+        className={`shrink-0 border-b px-3 sm:px-5 py-2 flex items-center justify-between z-10 backdrop-blur-xl transition-colors titlebar-drag relative ${
+          isDark
+            ? 'border-neutral-800/80 text-slate-200'
+            : 'border-neutral-200/80 text-neutral-800 shadow-sm'
+        }`}>
+        {/* Left Anchor: Brand & Audio Master Indicator */}
+        <div className="flex items-center gap-2 sm:gap-3 titlebar-no-drag">
           <div
             className={`w-2 h-2 rounded-full transition-all duration-300 ${
               isPlaying
@@ -1169,134 +1498,139 @@ function SynhaleApp(): React.JSX.Element {
                 : 'bg-neutral-500 opacity-60'
             }`}
           />
-          <span className="font-semibold tracking-widest text-xs uppercase font-sans">
+          <span className="font-semibold tracking-[0.24em] text-xs uppercase font-sans max-md:hidden">
             Synhale
-          </span>
-          <span className={`text-[10px] font-mono px-2 py-0.5 rounded border ${
-            isDark
-              ? 'border-neutral-800 bg-neutral-900/60 text-sky-400'
-              : 'border-neutral-300 bg-neutral-100 text-sky-600'
-          }`}>
-            432Hz CORE
           </span>
         </div>
 
-        {/* Action Controls & Integrated Native Window Controls (titlebar-no-drag) */}
-        <div className="flex items-center gap-2 titlebar-no-drag">
-          {/* Rhythm Selector Button */}
+        {/* Center Anchor: Layout 1 - Two completely independent tactile modules.
+            Absolutely centered against the full header width so wide right-side
+            controls cannot push the pair off-center; falls back to flow layout
+            on narrow viewports where true centering would collide. */}
+        <div className="flex items-center gap-3 titlebar-no-drag absolute left-1/2 -translate-x-1/2 max-md:static max-md:left-auto max-md:translate-x-0">
           <button
+            type="button"
             onClick={() => setIsRhythmDrawerOpen(true)}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-mono border transition-colors ${
+            className={`h-7 px-2.5 rounded-md border flex items-center gap-1.5 transition-all shadow-2xs ${
               isDark
-                ? 'border-neutral-800 bg-neutral-900/60 text-slate-300 hover:bg-neutral-800'
-                : 'border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 shadow-sm'
+                ? 'border-neutral-700/80 bg-neutral-900/90 text-slate-200 hover:bg-neutral-800'
+                : 'border-neutral-300 bg-neutral-100/90 text-neutral-800 hover:bg-white'
             }`}
-            title="Change Breath Rhythm"
+            title="切换呼吸节律"
+            aria-label="切换呼吸节律"
           >
-            <Wind size={13} className="text-emerald-400" />
-            <span className="hidden sm:inline">{activeRhythmLabel}</span>
+            <span className="text-[9px] font-sans font-bold uppercase tracking-wider text-neutral-400 dark:text-neutral-500 max-md:hidden">RHYTHM</span>
+            <span className="text-[11px] font-sans font-semibold tracking-tight tabular-nums">{activeRhythmLabel}</span>
           </button>
 
-          {/* Sound Presets Selector Button */}
           <button
+            type="button"
             onClick={() => setIsSoundDrawerOpen(true)}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-mono border transition-colors ${
+            className={`h-7 px-2.5 rounded-md border flex items-center gap-1.5 transition-all shadow-2xs ${
               isDark
-                ? 'border-neutral-800 bg-neutral-900/60 text-slate-300 hover:bg-neutral-800'
-                : 'border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 shadow-sm'
+                ? 'border-neutral-700/80 bg-neutral-900/90 text-slate-200 hover:bg-neutral-800'
+                : 'border-neutral-300 bg-neutral-100/90 text-neutral-800 hover:bg-white'
             }`}
-            title="Change Sound Preset"
+            title="切换音色"
+            aria-label="切换音色"
           >
-            <Sparkles size={13} className="text-sky-400" />
-            <span className="hidden sm:inline">{activeSoundPresetLabel}</span>
+            <span className="text-[9px] font-sans font-bold uppercase tracking-wider text-neutral-400 dark:text-neutral-500 max-md:hidden">TIMBRE</span>
+            <span className="text-[11px] font-sans font-semibold tracking-tight">{activeSoundPresetLabel}</span>
           </button>
+        </div>
 
-          {/* Save Custom Preset Button */}
+        {/* Right Anchor: Deck Console, Settings & Native Window Controls */}
+        <div className="flex items-center gap-1.5 titlebar-no-drag">
           <button
-            onClick={() => setIsSavePresetModalOpen(true)}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-mono border transition-colors ${
-              isDark
-                ? 'border-neutral-800 bg-neutral-900/60 text-slate-300 hover:border-sky-500/80 hover:text-sky-300'
-                : 'border-neutral-300 bg-white text-neutral-700 hover:border-sky-500/80 hover:text-sky-600 shadow-sm'
-            }`}
-            title="保存当前声音为新预设"
-            aria-label="Save Custom Preset"
-          >
-            <BookmarkPlus size={13} className="text-sky-400" />
-            <span className="hidden md:inline">保存预设</span>
-          </button>
-
-          {/* Hardware Console Toggle Button */}
-          <button
+            type="button"
             onClick={() => setIsDeckOpen(prev => !prev)}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs border transition-colors ${
+            className={`h-7 px-2.5 rounded-md border font-sans text-[11px] font-medium flex items-center gap-1.5 transition-all shadow-2xs ${
               isDeckOpen
                 ? isDark
-                  ? 'border-sky-500 bg-sky-950/40 text-sky-400 font-medium'
-                  : 'border-sky-400 bg-sky-50 text-sky-600 font-semibold shadow-xs'
+                  ? 'border-sky-500 bg-neutral-900 text-sky-300'
+                  : 'border-sky-500 bg-white text-sky-700'
                 : isDark
-                  ? 'border-neutral-800 bg-neutral-900/60 text-slate-300 hover:bg-neutral-800'
-                  : 'border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 shadow-sm'
+                  ? 'border-neutral-700/80 bg-neutral-900/90 text-neutral-300 hover:bg-neutral-800'
+                  : 'border-neutral-300 bg-neutral-100/90 text-neutral-700 hover:bg-white'
             }`}
-            title="Toggle Hardware Modulation Deck"
+            title="开关调制台"
+            aria-label="开关调制台"
           >
-            <Sliders size={13} className={isDeckOpen ? (isDark ? 'text-sky-400' : 'text-sky-600') : (isDark ? 'text-slate-400' : 'text-slate-600')} />
-            <span className="hidden sm:inline">Deck</span>
+            <span className={`w-1.5 h-1.5 rounded-full transition-all ${
+              isDeckOpen
+                ? 'bg-sky-400 shadow-[0_0_6px_rgba(56,189,248,0.9)]'
+                : 'bg-neutral-400 dark:bg-neutral-600'
+            }`} />
+            <span className="tracking-wider">DECK</span>
           </button>
 
-          {/* Settings & Preferences Button */}
           <button
-            onClick={() => setIsSettingsModalOpen(true)}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-mono border transition-colors ${
+            type="button"
+            onClick={() => {
+              setIsSettingsModalOpen(true);
+              // Ensure the audio engine exists before the user previews a cue
+              // sound in settings; otherwise the first preview click plays the
+              // synthetic fallback because samples are not loaded yet.
+              void ensureAudioInitialized();
+            }}
+            className={`w-7 h-7 rounded-md border flex items-center justify-center transition-colors shadow-2xs ${
               isDark
-                ? 'border-neutral-800 bg-neutral-900/60 text-slate-300 hover:bg-neutral-800 hover:text-white'
-                : 'border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50 shadow-sm'
+                ? 'border-neutral-700/80 bg-neutral-900/90 text-neutral-300 hover:bg-neutral-800 hover:text-white'
+                : 'border-neutral-300 bg-neutral-100/90 text-neutral-700 hover:bg-white hover:text-neutral-950'
             }`}
-            title="偏好设置 · Settings"
-            aria-label="Open Settings"
+            title="设置"
+            aria-label="打开设置"
           >
             <Settings size={13} />
-            <span className="hidden sm:inline">设置</span>
           </button>
 
           {/* Integrated Desktop Native Window Controls (Frameless Minimize / Maximize / Close) */}
           {isElectronApp && (
-            <div className="flex items-center gap-0.5 ml-2 pl-2 border-l border-neutral-700/60 dark:border-neutral-800/80">
+            <div className="flex items-center gap-0.5 ml-1.5 pl-2 border-l border-neutral-700/60 dark:border-neutral-800/80 titlebar-no-drag z-20">
               <button
                 type="button"
-                onClick={() => (window as any).electronAPI?.minimize()}
-                className={`w-7 h-7 flex items-center justify-center rounded-md transition-colors ${
+                onClick={(e) => {
+                  e.stopPropagation();
+                  (window as any).electronAPI?.minimize();
+                }}
+                className={`w-7 h-7 flex items-center justify-center rounded-md transition-colors titlebar-no-drag ${
                   isDark
                     ? 'text-neutral-400 hover:text-white hover:bg-neutral-800/80'
                     : 'text-neutral-600 hover:text-neutral-900 hover:bg-neutral-200/80'
                 }`}
-                title="最小化 · Minimize"
+                title="最小化"
                 aria-label="Minimize Window"
               >
                 <Minus size={13} strokeWidth={2} />
               </button>
               <button
                 type="button"
-                onClick={() => (window as any).electronAPI?.toggleMaximize()}
-                className={`w-7 h-7 flex items-center justify-center rounded-md transition-colors ${
+                onClick={(e) => {
+                  e.stopPropagation();
+                  (window as any).electronAPI?.toggleMaximize();
+                }}
+                className={`w-7 h-7 flex items-center justify-center rounded-md transition-colors titlebar-no-drag ${
                   isDark
                     ? 'text-neutral-400 hover:text-white hover:bg-neutral-800/80'
                     : 'text-neutral-600 hover:text-neutral-900 hover:bg-neutral-200/80'
                 }`}
-                title={isMaximized ? "还原 · Restore" : "最大化 · Maximize"}
+                title={isMaximized ? "还原" : "最大化"}
                 aria-label={isMaximized ? "Restore Window" : "Maximize Window"}
               >
                 {isMaximized ? <Copy size={11} strokeWidth={2} className="rotate-90" /> : <Square size={11} strokeWidth={2} />}
               </button>
               <button
                 type="button"
-                onClick={() => (window as any).electronAPI?.close()}
-                className={`w-7 h-7 flex items-center justify-center rounded-md transition-colors ${
+                onClick={(e) => {
+                  e.stopPropagation();
+                  (window as any).electronAPI?.close();
+                }}
+                className={`w-7 h-7 flex items-center justify-center rounded-md transition-colors titlebar-no-drag ${
                   isDark
-                    ? 'text-neutral-400 hover:text-white hover:bg-red-500/80'
-                    : 'text-neutral-600 hover:text-white hover:bg-red-500'
+                    ? 'text-neutral-400 hover:text-white hover:bg-rose-500/80 active:bg-rose-600'
+                    : 'text-neutral-600 hover:text-white hover:bg-rose-500 active:bg-rose-600'
                 }`}
-                title="关闭 · Close"
+                title="关闭"
                 aria-label="Close Window"
               >
                 <X size={13} strokeWidth={2} />
@@ -1305,6 +1639,14 @@ function SynhaleApp(): React.JSX.Element {
           )}
         </div>
       </header>
+
+      {operationError && (
+        <div role="alert" className={`fixed top-16 left-1/2 z-[150] w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 rounded-lg border px-4 py-3 text-sm shadow-lg ${
+          isDark ? 'border-rose-900 bg-neutral-950 text-rose-200' : 'border-rose-200 bg-white text-rose-800'
+        }`}>
+          {operationError}
+        </div>
+      )}
 
       {/* 2. Fullscreen Sacred Geometry Canvas */}
       <main className="relative flex-1 w-full h-full overflow-hidden">
@@ -1316,22 +1658,40 @@ function SynhaleApp(): React.JSX.Element {
           onPointerCancel={pointerHandlers.onPointerCancel}
         />
 
-        {/* Minimal Subtle Tap Hint when Idle */}
-        {!isPlaying && (
-          <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10 transition-opacity duration-500">
-            <div className={`px-4 py-2 rounded-full border text-xs tracking-widest font-mono uppercase backdrop-blur-sm ${
-              isDark
-                ? 'border-neutral-800/80 bg-neutral-950/60 text-neutral-400'
-                : 'border-neutral-300/80 bg-white/70 text-neutral-600 shadow-sm'
-            }`}>
-              轻触中心图形开始呼吸 · Tap Central Geometry to Breathe
-            </div>
-          </div>
+        {/* Center Semi-Transparent Arabic Numeral Breath Indicator */}
+        <CenterBreathIndicator
+          stage={clockSnapshot.currentStage}
+          stageProgress={clockSnapshot.stageProgress}
+          remainingSeconds={clockSnapshot.stageRemainingSeconds}
+          breathMacro={clockSnapshot.breathMacro}
+          isPlaying={isPlaying}
+          opacityPercent={indicatorOpacity}
+          precision={indicatorPrecision}
+          isDarkTheme={isDark}
+          onTogglePlay={togglePlayPause}
+        />
+
+        {/* Left-Edge Breath Cycle Bead Strand (ambient number-free cycle progress) */}
+        {cycleTrackerSettings.visible && (
+          <BreathBeadStrand
+            capacity={cycleTrackerSettings.capacity}
+            cycleCount={clockSnapshot.cycleCount}
+            cycleProgress={clockSnapshot.cycleProgress}
+            isPlaying={isPlaying}
+            isDarkTheme={isDark}
+          />
         )}
 
-        {/* 3. Floating Bottom Controls: Swipeable Dual-Group Visual Style Capsule + Breathing Status Capsule */}
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-20 flex flex-wrap items-center justify-center gap-3 pointer-events-none">
-          {/* Swipeable Visual Style Capsule (Interactive Group I & Group II) */}
+        {/* 3. Floating Bottom Controls: Fluid Morphing Pill Capsule + Sequential Next Preset Button */}
+        <div className="fixed bottom-6 max-md:bottom-[calc(0.75rem+env(safe-area-inset-bottom))] left-1/2 -translate-x-1/2 z-20 flex items-center justify-center gap-2.5 pointer-events-none select-none max-w-full px-2">
+          {/* Screen Reader Status Announcement (Visible Floating Tooltip Removed per User Request) */}
+          {activeVisualHint && (
+            <div role="status" className="sr-only">
+              {activeVisualHint.labelZh} ({activeVisualHint.label})
+            </div>
+          )}
+
+          {/* Primary Visual Style Capsule (Fluid Morphing Accordion) */}
           <div
             role="toolbar"
             aria-label="Visual Geometry Presets"
@@ -1342,48 +1702,71 @@ function SynhaleApp(): React.JSX.Element {
             onPointerLeave={handleCapsulePointerEnd}
             onWheel={handleCapsuleWheel}
             style={{ touchAction: 'pan-y' }}
-            title="左右滑动切换动效组 · Swipe Left/Right to Switch Group"
-            className={`pointer-events-auto flex items-center gap-1.5 p-1 rounded-full border backdrop-blur-md transition-all shadow-lg select-none cursor-grab active:cursor-grabbing ${
+            title="左右滑动切换动效组"
+            className={`pointer-events-auto relative flex items-center gap-2 px-2 py-1.5 rounded-full border backdrop-blur-xl transition-all select-none cursor-grab active:cursor-grabbing ${
               isDark
-                ? 'border-neutral-800 bg-neutral-950/85 text-neutral-300'
-                : 'border-neutral-300 bg-white/85 text-neutral-700 shadow-sm'
+                ? 'border-neutral-800/80 bg-neutral-950/75 text-neutral-300 shadow-[0_8px_32px_rgba(0,0,0,0.5)] ring-1 ring-white/[0.04]'
+                : 'border-neutral-200/80 bg-white/75 text-neutral-800 shadow-[0_8px_30px_rgba(0,0,0,0.04),0_1px_3px_rgba(0,0,0,0.02)] ring-1 ring-black/[0.03]'
             }`}
           >
-            {/* Group Switcher & Pagination Pill (I / II / III) */}
-            <button
-              type="button"
+            {/* 3 Interactive Group Switcher Dots */}
+            <div
+              role="group"
+              aria-label={`Switch Visual Preset Group (${visualPresetGroups[visualGroupIndex].groupLabelZh})`}
+              title={`当前：${visualPresetGroups[visualGroupIndex].groupLabelZh}`}
               onClick={() => {
                 if (capsuleSwipeRef.current.moved) return;
-                switchVisualGroup(((visualGroupIndex + 1) % 3) as 0 | 1 | 2);
+                const nextGroup = ((visualGroupIndex + 1) % 3) as 0 | 1 | 2;
+                switchVisualGroup(nextGroup);
+                triggerVisualHint(visualPresetGroups[nextGroup].groupLabelZh, visualPresetGroups[nextGroup].groupCode);
               }}
-              aria-label={`Switch Visual Preset Group (${visualPresetGroups[visualGroupIndex].groupLabelZh})`}
-              title={`当前：${visualPresetGroups[visualGroupIndex].groupLabelZh}（点击或左右滑动切换）`}
-              className={`flex items-center gap-1.5 pl-2.5 pr-2 py-1 rounded-full text-[10px] font-mono tracking-wider border transition-all ${
-                isDark
-                  ? 'border-neutral-800 bg-neutral-900/90 text-neutral-300 hover:border-neutral-600 hover:text-white'
-                  : 'border-neutral-200 bg-neutral-100/90 text-neutral-700 hover:border-neutral-400 hover:text-neutral-950'
+              className={`flex items-center gap-0.5 px-1.5 py-1 rounded-full cursor-pointer transition-colors ${
+                isDark ? 'hover:bg-white/[0.06]' : 'hover:bg-neutral-900/[0.04]'
               }`}
             >
-              <span className="inline-block w-[3ch] text-center font-semibold">{visualPresetGroups[visualGroupIndex].groupCode}</span>
-              <span className="flex items-center gap-1" aria-hidden="true">
-                {[0, 1, 2].map((idx) => (
-                  <span
-                    key={idx}
-                    className={`w-1.5 h-1.5 rounded-full transition-all duration-300 ${
-                      visualGroupIndex === idx
-                        ? isDark
-                          ? 'bg-zinc-100 scale-110'
-                          : 'bg-zinc-900 scale-110'
-                        : isDark
-                          ? 'bg-neutral-700'
-                          : 'bg-neutral-300'
-                    }`}
-                  />
-                ))}
-              </span>
-            </button>
+              {visualPresetGroups.map((grp, idx) => {
+                const isCurrentGroup = visualGroupIndex === idx;
+                return (
+                  <button
+                    key={grp.groupId}
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (capsuleSwipeRef.current.moved) return;
+                      switchVisualGroup(idx as 0 | 1 | 2);
+                      triggerVisualHint(grp.groupLabelZh, grp.groupCode);
+                    }}
+                    onMouseEnter={() => triggerVisualHint(grp.groupLabelZh, grp.groupCode)}
+                    aria-label={`${grp.groupLabelZh} (${grp.groupCode})`}
+                    aria-pressed={isCurrentGroup}
+                    title={`${grp.groupLabelZh} (${grp.groupCode})`}
+                    className="p-1 flex items-center justify-center rounded-full transition-transform hover:scale-125 focus:outline-none"
+                  >
+                    <span
+                      className={`block rounded-full transition-all duration-300 ${
+                        isCurrentGroup
+                          ? isDark
+                            ? 'w-3.5 h-1.5 bg-neutral-100 shadow-[0_0_8px_rgba(255,255,255,0.4)]'
+                            : 'w-3.5 h-1.5 bg-neutral-900 shadow-xs'
+                          : isDark
+                            ? 'w-1.5 h-1.5 bg-neutral-600 hover:bg-neutral-400'
+                            : 'w-1.5 h-1.5 bg-neutral-300 hover:bg-neutral-500'
+                      }`}
+                    />
+                  </button>
+                );
+              })}
+            </div>
 
-            {/* Sliding Tri-Group Viewport (Grid 1x1 Overlay keeps intrinsic 4-button width) */}
+            {/* 1px Fine Precision Hairline Divider */}
+            <div
+              className={`h-3.5 w-[1px] ${
+                isDark ? 'bg-neutral-800' : 'bg-neutral-200'
+              }`}
+              aria-hidden="true"
+            />
+
+            {/* Sliding Tri-Group Viewport (Grid 1x1 Overlay) */}
             <div className="grid grid-cols-1 grid-rows-1 overflow-hidden rounded-full">
               {visualPresetGroups.map((group, gIdx) => {
                 const isActiveGroup = visualGroupIndex === gIdx;
@@ -1413,21 +1796,28 @@ function SynhaleApp(): React.JSX.Element {
                             if (capsuleSwipeRef.current.moved) return;
                             setVisualGroupIndex(gIdx as 0 | 1 | 2);
                             setVisualPreset(p.id);
+                            triggerVisualHint(p.labelZh, p.label);
                           }}
+                          onMouseEnter={() => triggerVisualHint(p.labelZh, p.label)}
                           aria-pressed={isSelected}
-                          className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-mono transition-all ${
+                          aria-label={`${p.labelZh} (${p.label})`}
+                          className={`h-7 flex items-center justify-center rounded-full transition-all duration-300 font-semibold ${
                             isSelected
                               ? isDark
-                                ? 'bg-zinc-100/15 text-zinc-100 font-semibold border border-zinc-300/40 shadow-[0_0_10px_rgba(244,244,245,0.18)]'
-                                : 'bg-zinc-900/10 text-zinc-900 font-semibold border border-zinc-400 shadow-sm'
+                                ? 'px-2.5 gap-1.5 bg-white/[0.12] text-white ring-1 ring-white/15 shadow-[0_0_12px_rgba(255,255,255,0.08),inset_0_1px_1px_rgba(255,255,255,0.2)]'
+                                : 'px-2.5 gap-1.5 bg-neutral-900/[0.08] text-neutral-950 ring-1 ring-neutral-900/10 shadow-[inset_0_1px_1px_rgba(255,255,255,0.8),0_1px_2px_rgba(0,0,0,0.04)]'
                               : isDark
-                                ? 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900 border border-transparent'
-                                : 'text-neutral-500 hover:text-neutral-800 hover:bg-neutral-100 border border-transparent'
+                                ? 'w-7 text-neutral-400 hover:text-white hover:bg-white/[0.06]'
+                                : 'w-7 text-neutral-400 hover:text-neutral-800 hover:bg-neutral-900/[0.04]'
                           }`}
-                          title={`${p.labelZh} (${p.label}) · 左右滑动切换组`}
+                          title={`${p.labelZh} (${p.label})`}
                         >
-                          <Icon size={12} strokeWidth={1.75} />
-                          <span className="hidden sm:inline text-[11px]">{p.labelZh}</span>
+                          <Icon size={14} strokeWidth={isSelected ? 2.2 : 1.7} />
+                          {isSelected && (
+                            <span className="text-[11px] font-sans font-semibold tracking-tight whitespace-nowrap animate-in fade-in duration-200">
+                              {p.labelZh}
+                            </span>
+                          )}
                         </button>
                       );
                     })}
@@ -1437,82 +1827,489 @@ function SynhaleApp(): React.JSX.Element {
             </div>
           </div>
 
-          {/* Status Capsule (Interactive) */}
-          <div className="pointer-events-auto">
-            <StatusCapsule
-              stage={clockSnapshot.currentStage}
-              stageProgress={clockSnapshot.stageProgress}
-              remainingSeconds={clockSnapshot.stageRemainingSeconds}
-              isPlaying={isPlaying}
-              isDarkTheme={isDark}
-              onTogglePlay={togglePlayPause}
-              className="!static !bottom-auto !left-auto !translate-x-0"
-            />
-          </div>
+          {/* Sequential Next Preset Circular Companion Button */}
+          <button
+            type="button"
+            onClick={handleNextVisualPreset}
+            aria-label="Next Visual Preset"
+            title="下一个动效"
+            className={`pointer-events-auto w-9 h-9 flex items-center justify-center rounded-full border backdrop-blur-xl transition-all shadow-sm hover:scale-105 active:scale-95 ${
+              isDark
+                ? 'border-neutral-800/80 bg-neutral-950/75 text-neutral-400 hover:text-white hover:bg-neutral-900/90 shadow-[0_4px_16px_rgba(0,0,0,0.4)] ring-1 ring-white/[0.04]'
+                : 'border-neutral-200/80 bg-white/75 text-neutral-500 hover:text-neutral-950 hover:bg-white shadow-[0_4px_16px_rgba(0,0,0,0.04)] ring-1 ring-black/[0.03]'
+            }`}
+          >
+            <ChevronRight size={15} strokeWidth={2.2} />
+          </button>
         </div>
       </main>
 
-      {/* 4. Slide-Up Hardware Deck Console Drawer */}
+      {/* 4. Slide-Up Hardware Deck Console Drawer & Top Viewport Corridor */}
       {isDeckOpen && (
-        <div
-          role="dialog"
-          aria-label="Acoustic Control Console"
-          className={`fixed inset-x-0 bottom-0 max-h-[85vh] overflow-y-auto z-30 p-4 border-t shadow-2xl backdrop-blur-xl transition-all duration-300 ${
-            isDark
-              ? 'bg-[#09090b]/95 border-neutral-800 text-slate-100'
-              : 'bg-[#fcfbf9]/95 border-neutral-300 text-neutral-800'
-          }`}
-        >
-          <div className="max-w-6xl mx-auto space-y-4">
-            <div className={`flex items-center justify-between pb-2 border-b ${
-              isDark ? 'border-neutral-800/80' : 'border-neutral-200'
-            }`}>
-              <div className="flex items-center gap-2">
-                <Sliders size={14} className="text-sky-400" />
-                <span className="text-xs font-mono font-medium tracking-wider uppercase">
-                  Acoustic Control Console &amp; Modulation · 物理声学控制台
-                </span>
-              </div>
-              <button
-                onClick={() => setIsDeckOpen(false)}
-                className={`p-1 rounded transition-colors ${
-                  isDark
-                    ? 'hover:bg-neutral-800 text-neutral-400 hover:text-neutral-200'
-                    : 'hover:bg-neutral-200 text-neutral-500 hover:text-neutral-800'
-                }`}
-                aria-label="Close Console"
+        <>
+          {/* Top Viewport Corridor (Above Deck Drawer) */}
+          <div
+            className="fixed inset-x-0 top-11 bottom-[85vh] z-30 flex items-center justify-center px-4 pointer-events-auto select-none"
+          >
+            {draggingModule && (draggingModule.kind === 'source' || draggingModule.lane !== 'staged') ? (
+              /* Dragging State: Ethereal HUD Drop Bay (from Deck or Sound Sources) */
+              <div
+                className="w-full max-w-4xl h-full flex items-center justify-center gap-3 py-1.5 animate-in fade-in zoom-in-95 duration-200"
+                onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }}
               >
-                <X size={16} />
-              </button>
-            </div>
+                {draggingModule.kind === 'source' ? (
+                  <>
+                    {/* Source Bay 1: Drop to Duplicate */}
+                    <div
+                      onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = 'copy'; setHoveredHudBay('duplicate'); }}
+                      onDragLeave={() => setHoveredHudBay(null)}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setHoveredHudBay(null);
+                        if (draggingModule && draggingModule.kind === 'source') {
+                          handleDuplicateSource(draggingModule.sourceId);
+                        }
+                      }}
+                      className={`flex-1 h-full min-h-[50px] max-h-[64px] rounded-lg border-2 flex items-center justify-center gap-2.5 px-3 transition-all duration-200 backdrop-blur-md cursor-pointer ${
+                        hoveredHudBay === 'duplicate'
+                          ? (isDark
+                              ? 'border-sky-400 bg-sky-950/60 text-sky-100 shadow-[0_0_25px_rgba(56,189,248,0.4)] scale-[1.02] ring-2 ring-sky-400/50'
+                              : 'border-sky-500 bg-sky-100/90 text-sky-800 shadow-[0_4px_20px_rgba(56,189,248,0.3)] scale-[1.02] ring-2 ring-sky-400/50')
+                          : (isDark
+                              ? 'border-dashed border-sky-500/40 bg-neutral-950/70 text-sky-300/80 hover:border-sky-500/70 shadow-lg'
+                              : 'border-dashed border-sky-300 bg-white/80 text-sky-700/80 hover:border-sky-400 shadow-sm')
+                      }`}
+                    >
+                      <Copy size={16} strokeWidth={2} className={hoveredHudBay === 'duplicate' ? 'animate-bounce text-sky-400' : 'text-sky-400/80'} />
+                      <div className="flex flex-col text-left">
+                        <span className="font-sans text-xs font-semibold tracking-wide">
+                          释放以复制
+                        </span>
+                        <span className="font-mono text-[9px] opacity-75 uppercase tracking-wider">
+                          DUPLICATE · {draggingModule.sourceName}
+                        </span>
+                      </div>
+                    </div>
 
-            <HardwareDeck
-              channelStrip={channelStrip}
-              effects={effects}
-              modulationRoutes={modulationRoutes}
-              onModulationRoutesChange={setModulationRoutes}
-              breathMacro={clockSnapshot.breathMacro}
-              breathStage={clockSnapshot.currentStage}
-              stageProgress={clockSnapshot.stageProgress}
-              isPlaying={isPlaying}
-              clockSnapshot={clockSnapshot}
-              onChannelStripChange={handleChannelStripChange}
-              onEffectsChange={handleEffectsChange}
-              onModulationRouteAssign={handleModulationRouteAssign}
-              getVisualGrains={() => audioEngineRef.current?.getVisualGrains() ?? []}
-              getAudioCurrentTime={() => audioEngineRef.current?.getAudioCurrentTime() ?? 0}
-              onReorderEffects={handleReorderEffects}
-              sourceRoutes={sourceRoutes}
-              onSourceRouteChange={handleSourceRouteChange}
-              laneAOrder={laneAOrder}
-              laneBOrder={laneBOrder}
-              onLaneReorder={handleLaneReorder}
-              onMoveEffectBetweenLanes={handleMoveEffectBetweenLanes}
-              onAddEffectToLane={handleAddEffectToLane}
-              onRemoveEffectFromLane={handleRemoveEffectFromLane}
-            />
+                    {/* Source Bay 2: Drop to Delete */}
+                    <div
+                      onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = 'move'; setHoveredHudBay('delete'); }}
+                      onDragLeave={() => setHoveredHudBay(null)}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setHoveredHudBay(null);
+                        if (draggingModule && draggingModule.kind === 'source') {
+                          handleDeleteSource(draggingModule.sourceId);
+                        }
+                      }}
+                      className={`flex-1 h-full min-h-[50px] max-h-[64px] rounded-lg border-2 flex items-center justify-center gap-2.5 px-3 transition-all duration-200 backdrop-blur-md cursor-pointer ${
+                        hoveredHudBay === 'delete'
+                          ? (isDark
+                              ? 'border-rose-500 bg-rose-950/60 text-rose-200 shadow-[0_0_25px_rgba(244,63,94,0.4)] scale-[1.02] ring-2 ring-rose-500/50'
+                              : 'border-rose-500 bg-rose-100/90 text-rose-800 shadow-[0_4px_20px_rgba(244,63,94,0.3)] scale-[1.02] ring-2 ring-rose-400/50')
+                          : (isDark
+                              ? 'border-dashed border-rose-500/40 bg-neutral-950/70 text-rose-300/80 hover:border-rose-500/70 shadow-lg'
+                              : 'border-dashed border-rose-300 bg-white/80 text-rose-700/80 hover:border-rose-400 shadow-sm')
+                      }`}
+                    >
+                      <Trash2 size={16} strokeWidth={2} className={hoveredHudBay === 'delete' ? 'animate-bounce text-rose-400' : 'text-rose-400/80'} />
+                      <div className="flex flex-col text-left">
+                        <span className="font-sans text-xs font-semibold tracking-wide">
+                          释放以删除
+                        </span>
+                        <span className="font-mono text-[9px] opacity-75 uppercase tracking-wider">
+                          DELETE · {draggingModule.sourceName}
+                        </span>
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    {/* Effect Bay 1: Drop to Delete */}
+                    <div
+                      onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = 'move'; setHoveredHudBay('delete'); }}
+                      onDragLeave={() => setHoveredHudBay(null)}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setHoveredHudBay(null);
+                        if (draggingModule && draggingModule.kind === 'effect') {
+                          if (draggingModule.lane === 'staged') {
+                            setStagedEffectIds(prev => prev.filter(id => id !== draggingModule.effectId));
+                          } else {
+                            handleRemoveEffectFromLane(draggingModule.lane, draggingModule.effectId);
+                          }
+                          setDraggingModule(null);
+                        }
+                      }}
+                      className={`flex-1 h-full min-h-[50px] max-h-[64px] rounded-lg border-2 flex items-center justify-center gap-2.5 px-3 transition-all duration-200 backdrop-blur-md cursor-pointer ${
+                        hoveredHudBay === 'delete'
+                          ? (isDark
+                              ? 'border-rose-500 bg-rose-950/60 text-rose-200 shadow-[0_0_25px_rgba(244,63,94,0.4)] scale-[1.02] ring-2 ring-rose-500/50'
+                              : 'border-rose-500 bg-rose-100/90 text-rose-800 shadow-[0_4px_20px_rgba(244,63,94,0.3)] scale-[1.02] ring-2 ring-rose-400/50')
+                          : (isDark
+                              ? 'border-dashed border-rose-500/40 bg-neutral-950/70 text-rose-300/80 hover:border-rose-500/70 shadow-lg'
+                              : 'border-dashed border-rose-300 bg-white/80 text-rose-700/80 hover:border-rose-400 shadow-sm')
+                      }`}
+                    >
+                      <Trash2 size={16} strokeWidth={2} className={hoveredHudBay === 'delete' ? 'animate-bounce text-rose-400' : 'text-rose-400/80'} />
+                      <div className="flex flex-col text-left">
+                        <span className="font-sans text-xs font-semibold tracking-wide">
+                          释放以移除
+                        </span>
+                        <span className="font-mono text-[9px] opacity-75 uppercase tracking-wider">
+                          REMOVE · {draggingModule.effectName}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Effect Bay 2: Drop to Switch Bus */}
+                    <div
+                      onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = 'move'; setHoveredHudBay('switch'); }}
+                      onDragLeave={() => setHoveredHudBay(null)}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setHoveredHudBay(null);
+                        if (draggingModule && draggingModule.kind === 'effect') {
+                          if (draggingModule.lane === 'staged') {
+                            setStagedEffectIds(prev => prev.filter(id => id !== draggingModule.effectId));
+                            handleAddEffectToLane('laneA', draggingModule.effectId);
+                          } else {
+                            const targetLane = draggingModule.lane === 'laneA' ? 'laneB' : 'laneA';
+                            handleMoveEffectBetweenLanes(draggingModule.effectId, draggingModule.lane, targetLane);
+                          }
+                          setDraggingModule(null);
+                        }
+                      }}
+                      className={`flex-1 h-full min-h-[50px] max-h-[64px] rounded-lg border-2 flex items-center justify-center gap-2.5 px-3 transition-all duration-200 backdrop-blur-md cursor-pointer ${
+                        hoveredHudBay === 'switch'
+                          ? (isDark
+                              ? 'border-sky-400 bg-sky-950/60 text-sky-100 shadow-[0_0_25px_rgba(56,189,248,0.4)] scale-[1.02] ring-2 ring-sky-400/50'
+                              : 'border-sky-500 bg-sky-100/90 text-sky-800 shadow-[0_4px_20px_rgba(56,189,248,0.3)] scale-[1.02] ring-2 ring-sky-400/50')
+                          : (isDark
+                              ? 'border-dashed border-sky-500/40 bg-neutral-950/70 text-sky-300/80 hover:border-sky-500/70 shadow-lg'
+                              : 'border-dashed border-sky-300 bg-white/80 text-sky-700/80 hover:border-sky-400 shadow-sm')
+                      }`}
+                    >
+                      <ArrowLeftRight size={16} strokeWidth={2} className={hoveredHudBay === 'switch' ? 'animate-pulse text-sky-400' : 'text-sky-400/80'} />
+                      <div className="flex flex-col text-left">
+                        <span className="font-sans text-xs font-semibold tracking-wide">
+                          释放迁移至 {draggingModule.lane === 'laneA' ? 'BUS B' : 'BUS A'}
+                        </span>
+                        <span className="font-mono text-[9px] opacity-75 uppercase tracking-wider">
+                          SWITCH BUS
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Effect Bay 3: Drop to Stage Module (存放模块) */}
+                    <div
+                      onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = 'move'; setHoveredHudBay('stage'); }}
+                      onDragLeave={() => setHoveredHudBay(null)}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setHoveredHudBay(null);
+                        if (draggingModule && draggingModule.kind === 'effect') {
+                          handleStageEffect(draggingModule.effectId, draggingModule.lane);
+                        }
+                      }}
+                      className={`flex-1 h-full min-h-[50px] max-h-[64px] rounded-lg border-2 flex items-center justify-center gap-2.5 px-3 transition-all duration-200 backdrop-blur-md cursor-pointer ${
+                        hoveredHudBay === 'stage'
+                          ? (isDark
+                              ? 'border-teal-400 bg-teal-950/60 text-teal-100 shadow-[0_0_25px_rgba(20,184,166,0.4)] scale-[1.02] ring-2 ring-teal-400/50'
+                              : 'border-teal-500 bg-teal-100/90 text-teal-800 shadow-[0_4px_20px_rgba(20,184,166,0.3)] scale-[1.02] ring-2 ring-teal-400/50')
+                          : (isDark
+                              ? 'border-dashed border-teal-500/40 bg-neutral-950/70 text-teal-300/80 hover:border-teal-500/70 shadow-lg'
+                              : 'border-dashed border-teal-300 bg-white/80 text-teal-700/80 hover:border-teal-400 shadow-sm')
+                      }`}
+                    >
+                      <Box size={16} strokeWidth={2} className={hoveredHudBay === 'stage' ? 'animate-bounce text-teal-400' : 'text-teal-400/80'} />
+                      <div className="flex flex-col text-left">
+                        <span className="font-sans text-xs font-semibold tracking-wide">
+                          释放以存放
+                        </span>
+                        <span className="font-mono text-[9px] opacity-75 uppercase tracking-wider">
+                          STAGE · {draggingModule.effectName}
+                        </span>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            ) : (stagedEffectIds.length > 0 || (draggingModule && draggingModule.kind === 'effect' && draggingModule.lane === 'staged')) ? (
+              /* Staging Bay Active State: Stays mounted continuously during staged drag to avoid unmounting drag target */
+              <div
+                className="w-full max-w-4xl h-full flex items-center justify-between gap-3 py-1 animate-in fade-in duration-150"
+                onDragOver={(e) => {
+                  if (draggingModule && draggingModule.kind === 'effect' && (draggingModule.lane === 'laneA' || draggingModule.lane === 'laneB')) {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = 'move';
+                  }
+                }}
+                onDrop={(e) => {
+                  if (draggingModule && draggingModule.kind === 'effect' && (draggingModule.lane === 'laneA' || draggingModule.lane === 'laneB')) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    handleStageEffect(draggingModule.effectId, draggingModule.lane);
+                  }
+                }}
+              >
+                <div
+                  className={`flex-1 flex items-center gap-2.5 px-3 py-1.5 rounded-lg border backdrop-blur-md transition-all shadow-md overflow-x-auto ${
+                    isDark
+                      ? 'border-teal-500/40 bg-neutral-950/85 text-teal-200 shadow-[0_0_20px_rgba(20,184,166,0.15)] ring-1 ring-teal-500/20'
+                      : 'border-teal-300 bg-white/90 text-teal-800 shadow-sm ring-1 ring-teal-400/20'
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 shrink-0 pr-2 border-r border-teal-500/30">
+                    <span className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-pulse shadow-[0_0_6px_#2dd4bf]" />
+                    <span className="text-[10px] font-mono font-bold tracking-wider uppercase text-teal-400">
+                      STAGING BAY
+                    </span>
+                    <span className="text-[9px] font-mono text-teal-400/70">
+                      ({stagedEffectIds.length})
+                    </span>
+                  </div>
+
+                  {/* Draggable Staged Module Chips with Quick Action Controls */}
+                  <div className="flex items-center gap-2 flex-1 min-w-0">
+                    {stagedEffectIds.map(effId => {
+                      const modType = getEffectModuleType(effId);
+                      const rule = EFFECT_MODULE_RULES[modType] || { code: 'FX', name: effId, cnName: effId };
+                      const isThisDragging = draggingModule?.kind === 'effect' && draggingModule.effectId === effId;
+                      return (
+                        <div
+                          key={effId}
+                          draggable={true}
+                          onDragStart={(e) => {
+                            const payload: DraggingModule = { kind: 'effect', effectId: effId, lane: 'staged', effectName: rule.name };
+                            try {
+                              e.dataTransfer.setData('application/json', JSON.stringify(payload));
+                              e.dataTransfer.setData('text/plain', JSON.stringify(payload));
+                              e.dataTransfer.effectAllowed = 'move';
+                            } catch {}
+                            setDraggingModule(payload);
+                          }}
+                          onDragEnd={() => {
+                            setDraggingModule(null);
+                            setHoveredHudBay(null);
+                          }}
+                          title="拖回 BUS 或点击装载"
+                          className={`group flex items-center gap-1.5 px-2 py-1 rounded-md border text-xs font-mono font-semibold cursor-grab active:cursor-grabbing select-none transition-all duration-150 ${
+                            isThisDragging
+                              ? 'opacity-35 scale-95 border-dashed border-teal-400 ring-2 ring-teal-400/50 shadow-inner'
+                              : isDark
+                              ? 'border-teal-400/50 bg-teal-950/70 text-teal-200 hover:border-teal-300 hover:shadow-[0_0_12px_rgba(45,212,191,0.5)]'
+                              : 'border-teal-400 bg-teal-50 text-teal-900 hover:bg-teal-100 hover:shadow-xs'
+                          }`}
+                        >
+                          <span className="px-1 py-0.5 rounded text-[8.5px] font-bold bg-teal-500/20 text-teal-300">
+                            {rule.code}
+                          </span>
+                          <span className="text-[10px] truncate max-w-[90px]">{rule.name}</span>
+
+                          {/* Quick Mount / Discard Controls */}
+                          <div className="flex items-center gap-0.5 ml-1 opacity-70 group-hover:opacity-100 transition-opacity" onMouseDown={e => e.stopPropagation()}>
+                            <button
+                              type="button"
+                              onClick={() => handleUnstageEffect(effId, 'laneA')}
+                              title="装载至 BUS A"
+                              className="px-1 py-0.5 rounded text-[8px] font-mono font-bold bg-sky-500/20 text-sky-300 hover:bg-sky-500/40 transition-colors"
+                            >
+                              +A
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleUnstageEffect(effId, 'laneB')}
+                              title="装载至 BUS B"
+                              className="px-1 py-0.5 rounded text-[8px] font-mono font-bold bg-teal-500/20 text-teal-300 hover:bg-teal-500/40 transition-colors"
+                            >
+                              +B
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setStagedEffectIds(prev => prev.filter(id => id !== effId))}
+                              title="从寄存区彻底删除"
+                              className="p-0.5 rounded text-neutral-400 hover:text-rose-400 hover:bg-rose-500/20 transition-colors"
+                            >
+                              <X size={10} strokeWidth={2} />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {draggingModule?.kind === 'effect' && draggingModule.lane === 'staged' ? (
+                    <span className="text-[9px] font-mono text-teal-300 animate-pulse font-medium shrink-0 hidden sm:inline">
+                      释放到下方 BUS A / BUS B 或右侧垃圾箱
+                    </span>
+                  ) : (
+                    <span className="text-[9px] font-mono text-teal-400/60 shrink-0 hidden sm:inline">
+                      按住拖放或点击 +A/+B 装载
+                    </span>
+                  )}
+                </div>
+
+                {/* Staged Drag Trash Target Bay (Appears when dragging a staged module) */}
+                {draggingModule?.kind === 'effect' && draggingModule.lane === 'staged' && (
+                  <div
+                    onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = 'move'; setHoveredHudBay('delete'); }}
+                    onDragLeave={() => setHoveredHudBay(null)}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setHoveredHudBay(null);
+                      if (draggingModule && draggingModule.kind === 'effect' && draggingModule.lane === 'staged') {
+                        setStagedEffectIds(prev => prev.filter(id => id !== draggingModule.effectId));
+                        setDraggingModule(null);
+                      }
+                    }}
+                    className={`h-full min-h-[46px] max-h-[56px] px-3.5 rounded-lg border-2 flex items-center gap-2 transition-all backdrop-blur-md cursor-pointer animate-in fade-in zoom-in-95 duration-150 ${
+                      hoveredHudBay === 'delete'
+                        ? (isDark ? 'border-rose-400 bg-rose-950/70 text-rose-100 ring-2 ring-rose-400/50 scale-[1.02]' : 'border-rose-500 bg-rose-100 text-rose-800 scale-[1.02]')
+                        : (isDark ? 'border-dashed border-rose-500/50 bg-neutral-950/80 text-rose-300 hover:border-rose-400' : 'border-dashed border-rose-300 bg-white/90 text-rose-700 hover:border-rose-400')
+                    }`}
+                  >
+                    <Trash2 size={14} className={hoveredHudBay === 'delete' ? 'text-rose-400 animate-bounce' : 'text-rose-400/80'} />
+                    <span className="text-[10px] font-mono font-semibold">释放删除</span>
+                  </div>
+                )}
+
+                {/* Quick Play/Pause Companion Button (Rendered when not dragging) */}
+                {!draggingModule && (
+                  <button
+                    type="button"
+                    onClick={togglePlayPause}
+                    title="点击空白暂停或继续"
+                    aria-label={isPlaying ? 'Pause' : 'Resume'}
+                    className={`shrink-0 px-3 py-1.5 rounded-lg border text-[11px] font-sans font-semibold tracking-wide transition-all backdrop-blur-md flex items-center gap-2 shadow-sm ${
+                      isDark
+                        ? 'border-neutral-800 bg-black/60 text-slate-200 hover:bg-neutral-900'
+                        : 'border-neutral-200 bg-white/80 text-neutral-800 hover:bg-white'
+                    }`}
+                  >
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full ${
+                        isPlaying
+                          ? 'bg-emerald-400 shadow-[0_0_8px_#34d399] animate-pulse'
+                          : 'bg-slate-400 shadow-[0_0_8px_rgba(148,163,184,0.6)]'
+                      }`}
+                    />
+                    <span className="font-mono text-[10px]">{isPlaying ? 'PAUSE' : 'RESUME'}</span>
+                  </button>
+                )}
+              </div>
+            ) : (
+              /* Normal State: Quick Click-to-Play/Pause Trigger */
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={togglePlayPause}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    togglePlayPause();
+                  }
+                }}
+                aria-label={isPlaying ? 'Pause Breathing Soundscape' : 'Resume Breathing Soundscape'}
+                className="w-full h-full cursor-pointer"
+                title="点击空白暂停或继续"
+              />
+            )}
           </div>
-        </div>
+
+          {/* Slide-Up Hardware Deck Console Drawer */}
+          <div
+            role="dialog"
+            aria-label="声学调制台 · Console"
+            style={{ backgroundColor: 'var(--synhale-panel-bg)' }}
+            className={`synhale-deck-scope fixed inset-x-0 bottom-0 h-[85vh] max-h-[85vh] overflow-y-auto max-md:h-[85dvh] max-md:max-h-[85dvh] z-30 p-4 border-t shadow-2xl backdrop-blur-xl transition-all duration-300 ${
+              isDark
+                ? 'border-neutral-800 text-slate-100'
+                : 'border-neutral-300 text-neutral-800'
+            }`}
+          >
+            <div className="max-w-6xl mx-auto space-y-4 max-md:min-w-[900px] synhale-deck-fit">
+              <div className={`flex items-center justify-between pb-2 border-b ${
+                isDark ? 'border-neutral-800/80' : 'border-neutral-200'
+              }`}>
+                <div className="flex items-center gap-2">
+                  <Sliders size={14} className="text-sky-400" />
+                  <span className="text-xs font-mono font-medium tracking-wider uppercase">
+                    声学调制台 · Console
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  {/* Save Custom Preset Button (Integrated into Deck Console Header) */}
+                  <button
+                    type="button"
+                    onClick={() => setIsSavePresetModalOpen(true)}
+                    className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-sans border transition-all ${
+                      isDark
+                        ? 'border-neutral-700/80 bg-neutral-900/90 text-slate-200 hover:border-sky-500/80 hover:text-sky-300 hover:bg-neutral-800/80 shadow-xs'
+                        : 'border-neutral-300 bg-white text-neutral-700 hover:border-sky-500/80 hover:text-sky-600 hover:bg-neutral-50 shadow-sm'
+                    }`}
+                    title="保存当前声音为新预设"
+                    aria-label="Save Custom Preset"
+                  >
+                    <BookmarkPlus size={13} className="text-sky-400" />
+                    <span className="font-medium text-[11px]">保存预设</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setIsDeckOpen(false)}
+                    className={`p-1 rounded transition-colors ${
+                      isDark
+                        ? 'hover:bg-neutral-800 text-neutral-400 hover:text-neutral-200'
+                        : 'hover:bg-neutral-200 text-neutral-500 hover:text-neutral-800'
+                    }`}
+                    aria-label="Close Console"
+                  >
+                    <X size={16} />
+                  </button>
+                </div>
+              </div>
+
+              <HardwareDeck
+                channelStrip={channelStrip}
+                effects={effects}
+                modulationRoutes={modulationRoutes}
+                onModulationRoutesChange={setModulationRoutes}
+                breathMacro={clockSnapshot.breathMacro}
+                breathStage={clockSnapshot.currentStage}
+                stageProgress={clockSnapshot.stageProgress}
+                isPlaying={isPlaying}
+                clockSnapshot={clockSnapshot}
+                onChannelStripChange={handleChannelStripChange}
+                onEffectsChange={handleEffectsChange}
+                onModulationRouteAssign={handleModulationRouteAssign}
+                getVisualGrains={() => audioEngineRef.current?.getVisualGrains() ?? []}
+                getAudioCurrentTime={() => audioEngineRef.current?.getAudioCurrentTime() ?? 0}
+                onReorderEffects={handleReorderEffects}
+                sourceRoutes={sourceRoutes}
+                onSourceRouteChange={handleSourceRouteChange}
+                laneAOrder={laneAOrder}
+                laneBOrder={laneBOrder}
+                onLaneReorder={handleLaneReorder}
+                onMoveEffectBetweenLanes={handleMoveEffectBetweenLanes}
+                onAddEffectToLane={handleAddEffectToLane}
+                onRemoveEffectFromLane={handleRemoveEffectFromLane}
+                activeSources={activeSources}
+                draggingItem={draggingModule}
+                onDragModuleChange={setDraggingModule}
+                onDuplicateSource={handleDuplicateSource}
+                onDeleteSource={handleDeleteSource}
+                onUnstageEffect={handleUnstageEffect}
+              />
+            </div>
+          </div>
+        </>
       )}
 
       {/* 5. Bottom Sheet Drawer for Breath Rhythms */}
@@ -1520,8 +2317,7 @@ function SynhaleApp(): React.JSX.Element {
         isOpen={isRhythmDrawerOpen}
         isDark={isDark}
         onClose={() => setIsRhythmDrawerOpen(false)}
-        title="Select Breath Rhythm"
-        subTitle="选择呼吸节律"
+        title="选择呼吸节律"
         items={rhythmDrawerItems}
         selectedId={activeRhythmKey}
         onSelect={handleRhythmSelect}
@@ -1533,7 +2329,7 @@ function SynhaleApp(): React.JSX.Element {
               setIsCustomRhythmModalOpen(true);
             }}
             className="flex items-center gap-1 px-2.5 py-1 text-xs font-mono font-medium rounded-lg border border-sky-500/30 bg-sky-500/10 text-sky-400 hover:bg-sky-500/20 hover:border-sky-500/50 transition-colors"
-            title="新增自定义呼吸模式"
+            title="新增节律"
           >
             <Plus size={12} strokeWidth={2.2} />
             <span>自定义节律</span>
@@ -1546,8 +2342,7 @@ function SynhaleApp(): React.JSX.Element {
         isOpen={isSoundDrawerOpen}
         isDark={isDark}
         onClose={() => setIsSoundDrawerOpen(false)}
-        title="选择声疗音色预设"
-        subTitle="Sound Therapy Presets"
+        title="选择音色预设"
         items={soundDrawerItems}
         selectedId={activeSoundPresetKey}
         onSelect={handleSoundPresetSelect}
@@ -1564,6 +2359,9 @@ function SynhaleApp(): React.JSX.Element {
           <div
             role="dialog"
             aria-label="Save Sound Preset"
+            ref={saveDialogRef}
+            tabIndex={-1}
+            aria-modal="true"
             className={`relative w-full max-w-sm rounded-xl border p-5 shadow-2xl transition-colors ${
               isDark
                 ? 'border-neutral-800 bg-neutral-950 text-slate-100'
@@ -1579,7 +2377,7 @@ function SynhaleApp(): React.JSX.Element {
                 <h2 className={`text-xs font-semibold tracking-wider uppercase ${
                   isDark ? 'text-slate-100' : 'text-neutral-900'
                 }`}>
-                  保存自定义声疗预设 · Save Preset
+                  保存预设
                 </h2>
               </div>
               <button
@@ -1638,14 +2436,14 @@ function SynhaleApp(): React.JSX.Element {
                     ? 'border-sky-500/30 bg-sky-500/10 text-sky-200'
                     : 'border-sky-200 bg-sky-50 text-sky-800'
                 }`}>
-                  将用当前面板全部旋钮、波表、推子与呼吸调制路由直接覆盖已存在的预设「{activeSoundPresetLabel}」。
+                  将覆盖预设「{activeSoundPresetLabel}」。
                 </div>
               ) : (
                 <div>
                   <label className={`text-[10px] uppercase font-medium block mb-1.5 ${
                     isDark ? 'text-slate-400' : 'text-neutral-600'
                   }`}>
-                    预设名称 · Preset Name
+                    预设名称
                   </label>
                   <input
                     type="text"
@@ -1654,7 +2452,7 @@ function SynhaleApp(): React.JSX.Element {
                     placeholder="例如：深海脑波微风、夏夜颂钵"
                     value={newPresetName}
                     onChange={e => setNewPresetName(e.target.value)}
-                    className={`w-full px-3 py-2 rounded-lg border text-xs focus:outline-none focus:border-sky-500 font-sans transition-colors ${
+                    className={`w-full px-3 py-2 rounded-lg border text-xs max-md:text-base focus:outline-none focus:border-sky-500 font-sans transition-colors ${
                       isDark
                         ? 'border-neutral-800 bg-neutral-900 text-slate-100 placeholder:text-slate-500'
                         : 'border-neutral-300 bg-neutral-50 text-neutral-900 placeholder:text-neutral-400'
@@ -1668,7 +2466,10 @@ function SynhaleApp(): React.JSX.Element {
                   ? 'text-slate-400 bg-neutral-900/60 border-neutral-800/60'
                   : 'text-neutral-600 bg-neutral-50 border-neutral-200'
               }`}>
-                将当前 OSC A 波表及参数、OSC B 气流噪声、Drone 432Hz、模拟滤波器、双 LFO 与空间效果器完整保存至本地存储。
+                保存当前全部参数。
+                {channelStrip.granular?.sampleId?.startsWith('custom_') && (
+                  <p className="mt-1.5">导入的音频仅本次会话可用。</p>
+                )}
               </div>
 
               <div className={`flex items-center justify-end gap-2 pt-2 border-t ${
@@ -1707,6 +2508,9 @@ function SynhaleApp(): React.JSX.Element {
           <div
             role="dialog"
             aria-label="Rename Sound Preset"
+            ref={renameDialogRef}
+            tabIndex={-1}
+            aria-modal="true"
             className={`relative w-full max-w-sm rounded-xl border p-5 shadow-2xl transition-colors ${
               isDark
                 ? 'border-neutral-800 bg-neutral-950 text-slate-100'
@@ -1722,7 +2526,7 @@ function SynhaleApp(): React.JSX.Element {
                 <h2 className={`text-xs font-semibold tracking-wider uppercase ${
                   isDark ? 'text-slate-100' : 'text-neutral-900'
                 }`}>
-                  重命名预设 · Rename Preset
+                  重命名预设
                 </h2>
               </div>
               <button
@@ -1741,15 +2545,15 @@ function SynhaleApp(): React.JSX.Element {
                 <label className={`text-[10px] uppercase font-medium block mb-1.5 ${
                   isDark ? 'text-slate-400' : 'text-neutral-600'
                 }`}>
-                  输入新名称 · New Name
+                  新名称
                 </label>
                 <input
                   type="text"
                   autoFocus
                   required
-                  value={editingPresetName}
-                  onChange={e => setEditingPresetName(e.target.value)}
-                  className={`w-full px-3 py-2 rounded-lg border text-xs focus:outline-none focus:border-sky-500 font-sans transition-colors ${
+                    value={editingPresetName}
+                    onChange={e => setEditingPresetName(e.target.value)}
+                    className={`w-full px-3 py-2 rounded-lg border text-xs max-md:text-base focus:outline-none focus:border-sky-500 font-sans transition-colors ${
                     isDark
                       ? 'border-neutral-800 bg-neutral-900 text-slate-100 placeholder:text-slate-500'
                       : 'border-neutral-300 bg-neutral-50 text-neutral-900 placeholder:text-neutral-400'
@@ -1793,6 +2597,9 @@ function SynhaleApp(): React.JSX.Element {
           <div
             role="alertdialog"
             aria-label="Delete Sound Preset Confirmation"
+            ref={deletePresetDialogRef}
+            tabIndex={-1}
+            aria-modal="true"
             className={`relative w-full max-w-sm rounded-xl border p-5 shadow-2xl transition-colors ${
               isDark
                 ? 'border-rose-500/30 bg-neutral-950 text-slate-100'
@@ -1806,7 +2613,7 @@ function SynhaleApp(): React.JSX.Element {
               <div className="flex items-center gap-2">
                 <Trash2 size={15} className="text-rose-400" />
                 <h2 className="text-xs font-semibold tracking-wider uppercase text-rose-400">
-                  删除预设确认 · Delete Preset
+                  删除预设
                 </h2>
               </div>
               <button
@@ -1831,7 +2638,7 @@ function SynhaleApp(): React.JSX.Element {
                   ? 'text-slate-400 bg-rose-500/10 border-rose-500/20'
                   : 'text-rose-800 bg-rose-50 border-rose-200'
               }`}>
-                此操作将从本地存储彻底移除该预设，无法撤销。
+                删除后无法恢复。
               </p>
             </div>
 
@@ -1871,6 +2678,9 @@ function SynhaleApp(): React.JSX.Element {
           <div
             role="alertdialog"
             aria-label="Delete Breath Rhythm Confirmation"
+            ref={deleteRhythmDialogRef}
+            tabIndex={-1}
+            aria-modal="true"
             className={`relative w-full max-w-sm rounded-xl border p-5 shadow-2xl transition-colors ${
               isDark
                 ? 'border-rose-500/30 bg-neutral-950 text-slate-100'
@@ -1884,7 +2694,7 @@ function SynhaleApp(): React.JSX.Element {
               <div className="flex items-center gap-2">
                 <Trash2 size={15} className="text-rose-400" />
                 <h2 className="text-xs font-semibold tracking-wider uppercase text-rose-400">
-                  删除节律确认 · Delete Rhythm
+                  删除节律
                 </h2>
               </div>
               <button
@@ -1909,7 +2719,7 @@ function SynhaleApp(): React.JSX.Element {
                   ? 'text-slate-400 bg-rose-500/10 border-rose-500/20'
                   : 'text-rose-800 bg-rose-50 border-rose-200'
               }`}>
-                此操作将从本地存储彻底移除该自定义呼吸模式，无法撤销。
+                删除后无法恢复。
               </p>
             </div>
 
@@ -1958,8 +2768,16 @@ function SynhaleApp(): React.JSX.Element {
         onClose={() => setIsSettingsModalOpen(false)}
         isDark={isDark}
         onToggleTheme={toggleTheme}
+        themeId={palette.id}
+        onThemeIdChange={setThemeId}
         cueSettings={cueSettings}
         onCueSettingsChange={handleCueSettingsChange}
+        indicatorOpacity={indicatorOpacity}
+        onIndicatorOpacityChange={handleIndicatorOpacityChange}
+        indicatorPrecision={indicatorPrecision}
+        onIndicatorPrecisionChange={handleIndicatorPrecisionChange}
+        cycleTrackerSettings={cycleTrackerSettings}
+        onCycleTrackerSettingsChange={handleCycleTrackerSettingsChange}
         audioContext={audioEngineRef.current?.getContext()}
       />
     </div>

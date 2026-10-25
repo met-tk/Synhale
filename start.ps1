@@ -41,16 +41,16 @@ if (-not (Test-Path "node_modules")) {
     Write-Host ""
 }
 
-# 4. Launch browser
-Start-Job -ScriptBlock {
-    Start-Sleep -Seconds 2
-    Start-Process "http://127.0.0.1:3000/"
-} | Out-Null
-
 Write-Host "[OK] Environment verified." -ForegroundColor Green
-Write-Host "[Info] Starting Synhale 2 on http://127.0.0.1:3000/ ..." -ForegroundColor Green
-Write-Host "[Info] Opening browser..." -ForegroundColor Gray
+Write-Host "[Info] Starting Synhale 2..." -ForegroundColor Green
+Write-Host "[Info] The browser will open the available address shown below once the server is ready." -ForegroundColor Gray
 Write-Host ""
 
-# 5. Start dev server
-npm run dev
+# Vite may choose another port when 3000 is occupied. Let Vite open its
+# resolved address after listening, instead of opening a different local app.
+npm run dev -- --open
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "[ERROR] Synhale could not start. Please check the message above." -ForegroundColor Red
+    Read-Host "Press Enter to exit..."
+    exit 1
+}

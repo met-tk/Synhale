@@ -119,6 +119,7 @@ describe('Tier 5 Adversarial: Milestone M1 Audio Engine & DSP Stress Tests', () 
         delay: { feedback: 0.8, mix: 0.5 },
         reverb: { mix: 0.5, decayTime: 8.0 }
       });
+      ctx.advanceTime(1); // Allow scheduled anti-click ramps to settle.
 
       expect(engine.delay.feedbackGainL.gain.value).toBeCloseTo(0.8, 2);
       expect(engine.delay.delayInGain.gain.value).toBe(1.0);
@@ -138,6 +139,7 @@ describe('Tier 5 Adversarial: Milestone M1 Audio Engine & DSP Stress Tests', () 
         delay: { feedback: 0.75 },
         reverb: { mix: 0.8 }
       });
+      ctx.advanceTime(1); // Allow scheduled anti-click ramps to settle.
 
       expect(engine.delay.feedbackGainL.gain.value).toBe(0.0);
       expect(engine.delay.feedbackGainR.gain.value).toBe(0.0);
@@ -314,17 +316,21 @@ describe('Tier 5 Adversarial: Milestone M1 Audio Engine & DSP Stress Tests', () 
         expect(Number.isNaN(params.time)).toBe(false);
       });
 
-      it('clamps feedback strictly to 0.95 and prevents feedback explosion', () => {
+      it('clamps feedback strictly to 0.85 and prevents feedback explosion', () => {
         const delay = new StereoDelay(ctx as unknown as BaseAudioContext);
 
         // Try setting feedback > 1.0 (dangerous!)
         delay.setParams({ feedback: 1.5 });
-        expect(delay.getParams().feedback).toBe(0.95);
-        expect(delay.feedbackGainL.gain.value).toBe(0.95);
-        expect(delay.feedbackGainR.gain.value).toBe(0.95);
+        ctx.advanceTime(1); // Allow scheduled anti-click ramps to settle.
+        // Anti-howl limiter clamps to 0.85 (see StereoDelay.ts:154) — margin
+        // below ping-pong self-oscillation threshold under any damping setting.
+        expect(delay.getParams().feedback).toBe(0.85);
+        expect(delay.feedbackGainL.gain.value).toBe(0.85);
+        expect(delay.feedbackGainR.gain.value).toBe(0.85);
 
         // Try setting negative feedback
         delay.setParams({ feedback: -0.5 });
+        ctx.advanceTime(1); // Allow scheduled anti-click ramps to settle.
         expect(delay.getParams().feedback).toBe(0.0);
       });
     });
@@ -437,7 +443,7 @@ describe('Tier 5 Adversarial: Milestone M1 Audio Engine & DSP Stress Tests', () 
         expect(fx.drive.amount).toBe(1.0);
         expect(fx.drive.tone).toBe(0.0);
         expect(fx.delay.time).toBe(3.0);
-        expect(fx.delay.feedback).toBe(0.95);
+        expect(fx.delay.feedback).toBe(0.85);
         expect(fx.delay.damping).toBe(12000);
         expect(fx.delay.mix).toBe(1.0);
         expect(fx.reverb.decayTime).toBe(20.0);
