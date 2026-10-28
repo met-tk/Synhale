@@ -6,6 +6,7 @@
 import type { VisualRenderer, VisualRenderParams } from '../types';
 import { PRESET_RENDERERS, ALL_PRESET_RENDERERS } from './presets';
 import { evaluateOrganicBreathMotion } from './organicMotion';
+import { capDpr, createBudgetFrameGate } from '../performance/budget';
 
 /**
  * Sanitizes devicePixelRatio to prevent division by zero or non-positive scaling.
@@ -39,7 +40,8 @@ export function setupCanvasDPI(
     }
   }
   const rawDpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
-  const dpr = sanitizeDPR(rawDpr);
+  // 按性能预算封顶 DPR,低端设备避免高倍像素填充
+  const dpr = capDpr(rawDpr);
 
   const cssWidth = Math.max(0, rect.width);
   const cssHeight = Math.max(0, rect.height);
@@ -90,10 +92,33 @@ export function calculateTimeDilationRate(stage: VisualRenderParams['stage'], st
 const GUIDE_DASH = [4, 6];
 const SOLID_DASH: number[] = [];
 
+/**
+ * Quantize an alpha value to one of 33 discrete steps (0.000, 0.031, ..., 1.000) so
+ * strokeStyle strings can be cached and reused across frames instead of being
+ * re-allocated 60x per second. Visually indistinguishable from the continuous value.
+ */
+const ALPHA_STEPS = 32;
+const alphaStepCache = new Array<string>(ALPHA_STEPS + 1);
+for (let i = 0; i <= ALPHA_STEPS; i++) {
+  alphaStepCache[i] = (i / ALPHA_STEPS).toFixed(3);
+}
+function quantizeAlpha(a: number): string {
+  const clamped = a < 0 ? 0 : a > 1 ? 1 : a;
+  return alphaStepCache[Math.round(clamped * ALPHA_STEPS)];
+}
+
 export class CanvasRenderer implements VisualRenderer {
   private animationFrameId: number | null = null;
   private lastTimestamp = 0;
   private elapsedTime = 0;
+  /** Last quantized alpha keys used to skip redundant string building when unchanged. */
+  private lastGuideAlphaKey = -1;
+  private lastGlowAlphaKey = -1;
+  private lastTickAlphaKey = -1;
+  private lastThemeKey: boolean | null = null;
+  private cachedGuideStroke = '';
+  private cachedGlowStroke = '';
+  private cachedTickStroke = '';
 
   /**
    * Resets the rendering engine state and stops any active animation loop.
@@ -113,17 +138,22 @@ export class CanvasRenderer implements VisualRenderer {
     if (!ctx) return;
 
     this.lastTimestamp = typeof performance !== 'undefined' ? performance.now() : 0;
+    // 低端设备帧率上限 (30fps),降低 CPU/GPU 压力,时间轴不丢失
+    const frameGate = createBudgetFrameGate();
 
     const loop = (timestamp: number) => {
-      const rawDt = this.lastTimestamp > 0 ? (timestamp - this.lastTimestamp) / 1000 : 0.016;
-      const dt = clampDeltaTime(rawDt);
-      this.lastTimestamp = timestamp;
+      // 保持 rAF 调度,但按预算跳过昂贵渲染帧
+      if (frameGate(timestamp)) {
+        const rawDt = this.lastTimestamp > 0 ? (timestamp - this.lastTimestamp) / 1000 : 0.016;
+        const dt = clampDeltaTime(rawDt);
+        this.lastTimestamp = timestamp;
 
-      const params = getParams();
-      const dilation = calculateTimeDilationRate(params.stage, params.stageProgress);
-      this.elapsedTime += dt * dilation;
+        const params = getParams();
+        const dilation = calculateTimeDilationRate(params.stage, params.stageProgress);
+        this.elapsedTime += dt * dilation;
 
-      this.render(ctx, params);
+        this.render(ctx, params);
+      }
 
       if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
         this.animationFrameId = window.requestAnimationFrame(loop);
@@ -214,17 +244,29 @@ export class CanvasRenderer implements VisualRenderer {
     const luminance = motion ? motion.luminance : (0.6 + 0.4 * macro);
 
     const baseStroke = isDarkTheme ? 'rgba(228, 228, 231, ' : 'rgba(39, 39, 42, ';
-    const glowColor = baseStroke;
     const hasLineDash = typeof ctx.setLineDash === 'function';
 
-    // 1. Dashed precision guide ring
-    const guideAlpha = (0.10 + 0.14 * luminance).toFixed(3);
+    // Invalidate cached stroke strings when theme flips
+    if (this.lastThemeKey !== isDarkTheme) {
+      this.lastThemeKey = isDarkTheme;
+      this.lastGuideAlphaKey = -1;
+      this.lastGlowAlphaKey = -1;
+      this.lastTickAlphaKey = -1;
+    }
+
+    // 1. Dashed precision guide ring (alpha quantized & cached to avoid per-frame string alloc)
+    const guideAlphaNum = 0.10 + 0.14 * luminance;
+    const guideKey = Math.round((guideAlphaNum < 0 ? 0 : guideAlphaNum > 1 ? 1 : guideAlphaNum) * ALPHA_STEPS);
+    if (guideKey !== this.lastGuideAlphaKey) {
+      this.lastGuideAlphaKey = guideKey;
+      this.cachedGuideStroke = baseStroke + quantizeAlpha(guideAlphaNum) + ')';
+    }
     ctx.beginPath();
     ctx.lineWidth = 1.0;
     if (hasLineDash) {
       ctx.setLineDash(GUIDE_DASH);
     }
-    ctx.strokeStyle = `${baseStroke}${guideAlpha})`;
+    ctx.strokeStyle = this.cachedGuideStroke;
     ctx.arc(0, 0, maxRadius, 0, Math.PI * 2);
     ctx.stroke();
 
@@ -235,20 +277,30 @@ export class CanvasRenderer implements VisualRenderer {
     // 2. Proximity glow ring when approaching peak inhale or in holdIn
     if (macro > 0.8 || stage === 'holdIn') {
       const proximity = stage === 'holdIn' ? 1.0 : (macro - 0.8) / 0.2;
-      const glowAlpha = (0.15 + 0.25 * proximity * luminance).toFixed(3);
+      const glowAlphaNum = 0.15 + 0.25 * proximity * luminance;
+      const glowKey = Math.round((glowAlphaNum < 0 ? 0 : glowAlphaNum > 1 ? 1 : glowAlphaNum) * ALPHA_STEPS);
+      if (glowKey !== this.lastGlowAlphaKey) {
+        this.lastGlowAlphaKey = glowKey;
+        this.cachedGlowStroke = baseStroke + quantizeAlpha(glowAlphaNum) + ')';
+      }
       ctx.beginPath();
       ctx.lineWidth = 1.25;
-      ctx.strokeStyle = `${glowColor}${glowAlpha})`;
+      ctx.strokeStyle = this.cachedGlowStroke;
       ctx.arc(0, 0, maxRadius, 0, Math.PI * 2);
       ctx.stroke();
     }
 
     // 3. Four cardinal precision notches (0, 90, 180, 270 deg)
     const tickLen = 6;
-    const tickAlpha = (0.2 + 0.2 * macro).toFixed(3);
+    const tickAlphaNum = 0.2 + 0.2 * macro;
+    const tickKey = Math.round((tickAlphaNum < 0 ? 0 : tickAlphaNum > 1 ? 1 : tickAlphaNum) * ALPHA_STEPS);
+    if (tickKey !== this.lastTickAlphaKey) {
+      this.lastTickAlphaKey = tickKey;
+      this.cachedTickStroke = baseStroke + quantizeAlpha(tickAlphaNum) + ')';
+    }
     ctx.beginPath();
     ctx.lineWidth = 1.0;
-    ctx.strokeStyle = `${baseStroke}${tickAlpha})`;
+    ctx.strokeStyle = this.cachedTickStroke;
 
     // North, South, East, West notches
     ctx.moveTo(maxRadius - tickLen / 2, 0);

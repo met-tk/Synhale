@@ -73,52 +73,21 @@ export function renderTesseract4D(
   // Strictly continuous across all stage transitions (driven by organic macro)
   const scale = minDim * (0.165 + 0.103 * motion.macro);
 
-  // Forward continuous stage rotational progression with pronounced kinetic acceleration
-  // Inhale & Exhale dynamically surge in rotational speed; Hold In & Hold Out settle into serene glide
-  // Exactly completes 2*PI across the 4 stages with C1 smoothstep transitions (zero jumps across cycle restarts)
-  const p = Math.max(0, Math.min(1, params.stageProgress));
-  const smoothP = p * p * (3 - 2 * p);
-
-  let stageRotation = 0;
-  switch (params.stage) {
-    case 'inhale':
-      stageRotation = 2.80 * smoothP;
-      break;
-    case 'holdIn':
-      stageRotation = 2.80 + 0.34 * smoothP + 0.015 * Math.sin(p * Math.PI) * Math.sin(safeTime * 2.0);
-      break;
-    case 'exhale':
-      stageRotation = 3.14 + 2.80 * smoothP;
-      break;
-    case 'holdOut':
-      stageRotation = 5.94 + (Math.PI * 2 - 5.94) * smoothP;
-      break;
-  }
-
-  let stageYaw = 0;
-  switch (params.stage) {
-    case 'inhale':
-      stageYaw = 2.80 * smoothP;
-      break;
-    case 'holdIn':
-      stageYaw = 2.80 + 0.25 * smoothP + 0.010 * Math.sin(p * Math.PI) * Math.sin(safeTime * 1.8);
-      break;
-    case 'exhale':
-      stageYaw = 3.05 + 2.80 * smoothP;
-      break;
-    case 'holdOut':
-      stageYaw = 5.85 + (Math.PI * 2 - 5.85) * smoothP;
-      break;
-  }
+  // Strictly monotonic forward rotation. The angular velocity is constant
+  // (driven purely by safeTime) so the projected shape NEVER reverses direction
+  // or snaps. The breath rhythm is expressed through scale, aperture, depth-cue
+  // and luminance channels (all C1-continuous across stages via organicMotion),
+  // not through rotational speed — this is the only way to guarantee both
+  // (a) zero shape jumps at stage boundaries AND (b) constant spin direction.
 
   // 4D Rotation Angles:
   // Alpha: XW hyper-plane rotation (generates the inside-out inversion morph!)
-  const alpha = safeTime * 0.15 + stageRotation;
+  const alpha = safeTime * 0.42;
   const cosA = Math.cos(alpha);
   const sinA = Math.sin(alpha);
 
   // Beta: YZ spatial plane rotation (continuous 3D tumble)
-  const beta = safeTime * 0.12 + stageYaw;
+  const beta = safeTime * 0.27;
   const cosB = Math.cos(beta);
   const sinB = Math.sin(beta);
 

@@ -12,12 +12,21 @@ body {
   min-height: 100vh;
   background-color: #09090b;
   color: #f8fafc;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    "PingFang SC", "HarmonyOS Sans SC", "MiSans", "HONOR Sans CN", "Source Han Sans SC", "Noto Sans CJK SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
   overflow: hidden;
   user-select: none;
   -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
   -webkit-user-drag: none;
 }
+
+/*
+ * Chinese glyph refinement: CJK runs inside font-mono / font-sans utilities
+ * pick up the harmonized CJK grotesque declared in tailwind.config.js
+ * (fontFamily.sans / fontFamily.mono CJK fallbacks), so mixed labels such as
+ * "粉噪 · PINK" stop looking like two stitched fonts.
+ */
 
 /* Keep keyboard navigation visible across compact instrument controls. */
 :where(button, a, input, select, textarea, [tabindex]):focus-visible {

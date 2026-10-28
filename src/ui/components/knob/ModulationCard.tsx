@@ -12,6 +12,7 @@ import {
   extractStageMultipliersFromCurve
 } from '../../../audio/dsp/curveMath';
 import { polarToCartesian, describeArc } from './arcUtils';
+import { createBudgetFrameGate } from '../../../performance/budget';
 
 
 export interface ModulationCardProps {
@@ -150,10 +151,14 @@ export const ModulationCard: React.FC<ModulationCardProps> = ({
     if (!isOpen || !isPlaying) return;
     let frameId: number;
     let lastTime = performance.now();
+    // 低端设备帧率上限,时间轴基于 dt 累加,跳帧不丢时间
+    const frameGate = createBudgetFrameGate();
     const tick = (now: number) => {
       const dt = (now - lastTime) / 1000;
       lastTime = now;
-      setElapsedTime(prev => prev + dt);
+      if (frameGate(now)) {
+        setElapsedTime(prev => prev + dt);
+      }
       frameId = requestAnimationFrame(tick);
     };
     frameId = requestAnimationFrame(tick);

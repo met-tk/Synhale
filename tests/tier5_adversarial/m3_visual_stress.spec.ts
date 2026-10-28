@@ -212,12 +212,12 @@ describe('Tier 5 Adversarial: Milestone M3 Sacred Geometry Visual Canvas Stress 
       expect(canvas.style.width).toBe('1200px');
       expect(canvas.style.height).toBe('800px');
 
-      // Fractional DPR 2.75
+      // Fractional DPR 2.75 (high tier maxDpr=2, 封顶为 2)
       Object.defineProperty(window, 'devicePixelRatio', { value: 2.75, configurable: true });
       const res2 = setupCanvasDPI(canvas, strictCtx as unknown as CanvasRenderingContext2D);
-      expect(res2.dpr).toBe(2.75);
-      expect(canvas.width).toBe(3300); // 1200 * 2.75 = 3300
-      expect(canvas.height).toBe(2200); // 800 * 2.75 = 2200
+      expect(res2.dpr).toBe(2);
+      expect(canvas.width).toBe(2400); // 1200 * 2 (封顶后) = 2400
+      expect(canvas.height).toBe(1600); // 800 * 2 (封顶后) = 1600
 
       Object.defineProperty(window, 'devicePixelRatio', { value: origDpr, configurable: true });
     });

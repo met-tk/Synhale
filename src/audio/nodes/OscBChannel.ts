@@ -155,8 +155,15 @@ export class OscBChannel implements AudioSourceNode {
 
   start(when = 0): void {
     if (this.isStarted || this.isDisposed) return;
+    if (this.sourcesStopped) {
+      this.rebuildSources();
+    }
     this.isStarted = true;
-    this.noiseSource.start(when);
+    try {
+      this.noiseSource.start(when);
+    } catch {
+      // Already started
+    }
     try {
       this.motionLfo.start(when);
     } catch {
@@ -168,6 +175,7 @@ export class OscBChannel implements AudioSourceNode {
     if (!this.isStarted || this.isDisposed) return;
     try {
       this.noiseSource.stop(when);
+      this.sourcesStopped = true;
     } catch {
       // Ignore if already stopped
     }
@@ -177,6 +185,35 @@ export class OscBChannel implements AudioSourceNode {
       // Ignore if already stopped
     }
     this.isStarted = false;
+  }
+
+  private sourcesStopped = false;
+
+  /**
+   * Rebuild noiseSource + motionLfo after a hard stop (BufferSource/Oscillator are single-use).
+   * Reuses the existing bandpassFilter / downstream chain — only the source nodes are recreated.
+   */
+  private rebuildSources(): void {
+    try { this.noiseSource.disconnect(); } catch {}
+    try { this.motionLfo.disconnect(); } catch {}
+    try { this.motionGain.disconnect(); } catch {}
+
+    this.noiseSource = this.ctx.createBufferSource();
+    this.noiseSource.buffer = this.noiseBuffer;
+    this.noiseSource.loop = true;
+    this.noiseSource.connect(this.bandpassFilter);
+
+    this.motionLfo = this.ctx.createOscillator();
+    this.motionLfo.type = 'sine';
+    this.motionLfo.frequency.value = 1.35;
+
+    this.motionGain = this.ctx.createGain();
+    this.motionGain.gain.value = 0.0;
+
+    this.motionLfo.connect(this.motionGain);
+    this.motionGain.connect(this.bandpassFilter.frequency);
+
+    this.sourcesStopped = false;
   }
 
   setParams(params: Partial<ChannelStripParams['oscB']>): void {
@@ -229,6 +266,17 @@ export class OscBChannel implements AudioSourceNode {
       this.bypassGain.gain.cancelScheduledValues(now);
       this.bypassGain.gain.setValueAtTime(this.bypassGain.gain.value, now);
       this.bypassGain.gain.linearRampToValueAtTime(targetGain, now + 0.005);
+
+      // Deep bypass: stop noiseSource + motionLfo once the 5ms ramp reaches zero.
+      // start() rebuilds them on next unbypass — topology-neutral, no clicks.
+      if (params.bypass && this.isStarted) {
+        setTimeout(() => {
+          if (this.isDisposed || !this.currentParams.bypass) return;
+          this.stop(this.ctx.currentTime);
+        }, 8);
+      } else if (!params.bypass && !this.isStarted) {
+        this.start(this.ctx.currentTime);
+      }
     }
   }
 

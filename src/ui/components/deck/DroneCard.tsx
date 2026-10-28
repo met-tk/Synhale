@@ -28,6 +28,8 @@ export interface DroneCardProps {
   isDark: boolean;
   draggingItem?: any;
   onSourceDragStart: (sourceId: string, sourceType: SoundSourceType, sourceName: string) => (e: React.DragEvent) => void;
+  /** 触屏「点击托举」处理器（tap-to-carry 替代 HTML5 拖拽） */
+  onSourceTapLift?: (sourceId: string, sourceType: SoundSourceType, sourceName: string) => (e: React.MouseEvent) => void;
   onDragEnd: () => void;
 }
 
@@ -44,6 +46,7 @@ export const DroneCard: React.FC<DroneCardProps> = ({
   isDark,
   draggingItem,
   onSourceDragStart,
+  onSourceTapLift,
   onDragEnd
 }) => {
   const isInstance = sourceId.includes('_');
@@ -106,6 +109,7 @@ export const DroneCard: React.FC<DroneCardProps> = ({
         draggable={true}
         onDragStart={onSourceDragStart(sourceId, 'drone', `${typeName}${instanceSuffix}`)}
         onDragEnd={onDragEnd}
+        onClick={onSourceTapLift?.(sourceId, 'drone', `${typeName}${instanceSuffix}`)}
         title="拖至上方复制或删除"
         className={`flex items-center justify-between mb-3 border-b pb-1.5 cursor-grab active:cursor-grabbing select-none hover:bg-white/[0.02] rounded-t transition-colors ${cardHeaderBorderClass}`}
       >

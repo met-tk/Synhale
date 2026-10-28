@@ -190,6 +190,88 @@ export class AudioEngine implements AudioEngineApi {
   private laneBOrder: string[] = [...DEFAULT_LANE_B_ORDER];
   private effectModules: Map<string, AudioEffectNode> = new Map();
   private effectModuleParams: Map<string, any> = new Map();
+  /** Cached sublist of effectModules entries that are MultimodeFilter instances.
+   *  Avoids per-tick `instanceof` linear scans in the hot modulation loop. */
+  private filterModuleCache: Array<{ id: string; node: MultimodeFilter }> = [];
+  private filterModuleCacheDirty = true;
+
+  /**
+   * Per-parameter last-written value cache + minimum-delta guard for the 60Hz modulation loop.
+   *
+   * Why: Android WebView's requestAnimationFrame + setTargetAtTime interaction causes audible
+   * "zipper noise / clicking" when the same target value is re-scheduled every frame — the
+   * audio thread has to keep re-starting exponential convergence, and any main-thread jank
+   * batches multiple stale events into one render quantum. Skipping no-op writes eliminates
+   * the entire class of "pure playback" clicks without changing the modulation algorithm.
+   *
+   * Keyed by stable param path (e.g. 'master.gain', 'filter.cutoff:filter-1'); value is the
+   * last target we actually scheduled. Epsilon chosen to be well below perceptual threshold
+   * for each parameter family.
+   */
+  private lastModValues = new Map<string, number>();
+  private static readonly MOD_EPS = {
+    gain: 0.002,       // ~0.017 dB — inaudible
+    pan: 0.005,        // 0.5% of full L-R swing
+    cutoffHz: 1.0,     // 1 Hz at audio rates
+    reso: 0.005,
+    mixLevel: 0.002,
+    misc: 0.005,
+  } as const;
+
+  /** Schedule setTargetAtTime only if target has moved beyond epsilon since the last schedule. */
+  private scheduleParamGuarded(
+    key: string,
+    param: AudioParam,
+    target: number,
+    now: number,
+    tau: number,
+    eps: number
+  ): void {
+    const last = this.lastModValues.get(key);
+    if (last !== undefined && Math.abs(target - last) < eps) {
+      return;
+    }
+    param.setTargetAtTime(target, now, tau);
+    this.lastModValues.set(key, target);
+  }
+
+  /** Clear cached mod values (called on pause / preset load / route change). */
+  private clearModValueCache(): void {
+    this.lastModValues.clear();
+    this.lastSubModuleParams.clear();
+  }
+
+  /**
+   * Per-sub-module last-sent params cache. The 60Hz modulation loop calls
+   * `subModule.setParams({...})` every frame even when the values have not changed;
+   * most sub-modules do not have their own lastValue guard, so each call still triggers
+   * `setTargetAtTime` on internal gains (e.g. ConvolverReverb resets dry/wet on every
+   * mix call). We cache the last object we sent per (module, param-key) and skip the
+   * call entirely if every value is within epsilon of the cached one.
+   */
+  private lastSubModuleParams = new Map<string, Map<string, number>>();
+
+  /**
+   * Returns true if every numeric value in `params` is within `eps` of the cached values
+   * for `cacheKey`. Side effect: updates the cache when values have moved.
+   */
+  private shouldSendSubModuleParams(cacheKey: string, params: Record<string, number>, eps: number): boolean {
+    let cache = this.lastSubModuleParams.get(cacheKey);
+    if (!cache) {
+      cache = new Map();
+      this.lastSubModuleParams.set(cacheKey, cache);
+    }
+    let changed = false;
+    for (const k of Object.keys(params)) {
+      const v = params[k];
+      const last = cache.get(k);
+      if (last === undefined || Math.abs(v - last) >= eps) {
+        cache.set(k, v);
+        changed = true;
+      }
+    }
+    return changed;
+  }
 
   // State caches
   private channelStripState: ChannelStripParams = JSON.parse(JSON.stringify(DEFAULT_CHANNEL_STRIP));
@@ -341,6 +423,7 @@ export class AudioEngine implements AudioEngineApi {
     this.effectModules.set('reverb', this.reverb);
     this.lfoRackModule = new LfoRackEffectModule(ctx, this.dualLfo, 'lfo');
     this.effectModules.set('lfo', this.lfoRackModule);
+    this.filterModuleCacheDirty = true;
 
     // Initialize dedicated instance param snapshots
     this.effectModuleParams.set('gain', JSON.parse(JSON.stringify(this.effectsState.gain || DEFAULT_GAIN_PARAMS)));
@@ -548,6 +631,7 @@ export class AudioEngine implements AudioEngineApi {
     if (!this.ctx || !this.isInitialized || this.isDisposed) return;
     this.playbackRevision++;
     this.isPaused = true;
+    this.clearModValueCache(); // prevent stale mod targets from leaking across pause/resume boundaries
     const now = this.ctx.currentTime;
     const CUT_DURATION = 0.0025; // 2.5 milliseconds
 
@@ -576,7 +660,10 @@ export class AudioEngine implements AudioEngineApi {
     }
     this.triggerAllAdsrPurge();
 
-    // Defer voice disconnection by 3ms so source nodes do not clip while master gain micro-ramp is still non-zero
+    // Defer voice disconnection so source nodes do not clip while master gain micro-ramp is still non-zero.
+    // On Android WebView, setTimeout is frequently throttled beyond the requested delay, so we use a
+    // generous 25ms buffer to guarantee the 2.5ms master ramp has fully reached zero even under jank.
+    // This trades a tiny additional tail-silence for deterministic click-free purging.
     if (this.hardCutPurgeTimer !== null) {
       clearTimeout(this.hardCutPurgeTimer);
     }
@@ -590,7 +677,7 @@ export class AudioEngine implements AudioEngineApi {
           console.warn('AudioEngine: source purge failed during hard cut', err);
         }
       }
-    }, 3);
+    }, 25);
 
     // 3. Freeze Snapshot
     this.freezeSnapshot = {
@@ -737,6 +824,17 @@ export class AudioEngine implements AudioEngineApi {
     if (!this.ctx || this.isDisposed) return;
     const now = this.ctx.currentTime;
 
+    // Snapshot bypass flags once per tick so we can skip setParams calls for modules
+    // that are audibly disabled. This avoids burning main-thread AudioParam scheduling
+    // work on modules whose output is already zero.
+    const oscABypassed = this.oscA ? this.oscA.getParams().bypass === true : false;
+    const oscBBypassed = this.oscB ? this.oscB.getParams().bypass === true : false;
+    const droneBypassed = this.drone ? this.drone.getParams().bypass === true : false;
+    const reverbBypassed = this.reverb ? this.reverb.getParams().bypass === true : false;
+    const delayBypassed = this.delay ? this.delay.getParams().bypass === true : false;
+    const driveBypassed = this.drive ? this.drive.getParams().bypass === true : false;
+    const granularBypassed = this.granular ? this.granular.getParams().bypass === true : false;
+
     // 1. Master Volume Modulation (Stage Env / Master Fader)
     const masterRoute = this.modulationRoutes['master-fader'];
     if (masterRoute && masterRoute.source !== 'manual') {
@@ -753,11 +851,11 @@ export class AudioEngine implements AudioEngineApi {
       }
       const effectiveMasterGain = Math.max(0, Math.min(1, this.effectsState.masterGain * factor));
       if (this.masterVolumeGain) {
-        this.masterVolumeGain.gain.setTargetAtTime(effectiveMasterGain, now, 0.008);
+        this.scheduleParamGuarded('master.gain', this.masterVolumeGain.gain, effectiveMasterGain, now, 0.008, AudioEngine.MOD_EPS.gain);
       }
     } else {
       if (this.masterVolumeGain) {
-        this.masterVolumeGain.gain.setTargetAtTime(this.effectsState.masterGain, now, 0.008);
+        this.scheduleParamGuarded('master.gain', this.masterVolumeGain.gain, this.effectsState.masterGain, now, 0.008, AudioEngine.MOD_EPS.gain);
       }
     }
 
@@ -781,7 +879,7 @@ export class AudioEngine implements AudioEngineApi {
       effectiveLevelA = Math.max(0, Math.min(1, baseLevelA * factor));
     }
     if (this.busGainA) {
-      this.busGainA.gain.setTargetAtTime(cosA * effectiveLevelA, now, 0.008);
+      this.scheduleParamGuarded('busA.gain', this.busGainA.gain, cosA * effectiveLevelA, now, 0.008, AudioEngine.MOD_EPS.gain);
     }
 
     const busBRoute = this.modulationRoutes['bus-master-b'];
@@ -798,12 +896,27 @@ export class AudioEngine implements AudioEngineApi {
       effectiveLevelB = Math.max(0, Math.min(1, baseLevelB * factor));
     }
     if (this.busGainB) {
-      this.busGainB.gain.setTargetAtTime(sinB * effectiveLevelB, now, 0.008);
+      this.scheduleParamGuarded('busB.gain', this.busGainB.gain, sinB * effectiveLevelB, now, 0.008, AudioEngine.MOD_EPS.gain);
     }
 
     // 2 & 3. Filter Cutoff and Resonance Modulation across all active Filter instances (Single & Multi-Instance)
-    for (const [effId, modNode] of this.effectModules.entries()) {
-      if (modNode instanceof MultimodeFilter) {
+    // Rebuild cached filter list only when modules change to avoid 60Hz `instanceof` scans.
+    if (this.filterModuleCacheDirty) {
+      this.filterModuleCache = [];
+      for (const [effId, modNode] of this.effectModules.entries()) {
+        if (modNode instanceof MultimodeFilter) {
+          this.filterModuleCache.push({ id: effId, node: modNode });
+        }
+      }
+      this.filterModuleCacheDirty = false;
+    }
+    for (const { id: effId, node: modNode } of this.filterModuleCache) {
+      {
+        // Skip modulation writes for bypassed filters — they produce no audible output,
+        // so pushing cutoff/resonance updates only burns main-thread scheduling work.
+        const instParams = modNode.getParams();
+        if (instParams.bypass === true) continue;
+
         const isSingleton = effId === 'filter';
         const cutoffKnobId = isSingleton ? 'filter-cutoff' : `${effId}-cutoff`;
         const resKnobId = isSingleton ? 'filter-resonance' : `${effId}-resonance`;
@@ -840,88 +953,104 @@ export class AudioEngine implements AudioEngineApi {
       }
     }
 
-    // 4. OSC B Noise Color Modulation
-    const colorRoute = this.modulationRoutes['oscb-color'];
-    if (colorRoute && colorRoute.source !== 'manual') {
-      const liveVal = this.computeRouteLiveValue(colorRoute, stage, stageProgress, breathMacro);
-      const modColor = Math.max(0, Math.min(1, baseNoiseColor * (1 + (liveVal - 0.5) * colorRoute.depth)));
-      this.oscB.setParams({ color: modColor });
-    } else {
-      this.oscB.setParams({ color: baseNoiseColor });
-    }
-
-    // 5. OSC B Noise Gain Modulation
-    const noiseGainRoute = this.modulationRoutes['oscb-gain'];
-    if (noiseGainRoute && noiseGainRoute.source !== 'manual') {
-      const liveVal = this.computeRouteLiveValue(noiseGainRoute, stage, stageProgress, breathMacro);
-      const modGain = Math.max(0, Math.min(1, baseNoiseGain * ((1 - noiseGainRoute.depth) + noiseGainRoute.depth * liveVal)));
-      this.oscB.setParams({ gain: modGain });
-    } else {
-      this.oscB.setParams({ gain: baseNoiseGain });
-    }
-
-    // 6. Sub Drone Gain Modulation (Independent 432Hz Sub Drone)
-    if (this.drone) {
-      const droneRoute = this.modulationRoutes['drone-gain'];
-      if (droneRoute && droneRoute.source !== 'manual') {
-        const liveVal = this.computeRouteLiveValue(droneRoute, stage, stageProgress, breathMacro);
-        const modGain = Math.max(0, Math.min(1, baseDroneGain * ((1 - droneRoute.depth) + droneRoute.depth * liveVal)));
-        this.drone.setParams({ gain: modGain });
+    // 4. OSC B Noise Color Modulation (skipped when oscB is bypassed — no audible output)
+    if (!oscBBypassed) {
+      const colorRoute = this.modulationRoutes['oscb-color'];
+      let targetColor: number;
+      if (colorRoute && colorRoute.source !== 'manual') {
+        const liveVal = this.computeRouteLiveValue(colorRoute, stage, stageProgress, breathMacro);
+        targetColor = Math.max(0, Math.min(1, baseNoiseColor * (1 + (liveVal - 0.5) * colorRoute.depth)));
       } else {
-        this.drone.setParams({ gain: baseDroneGain });
+        targetColor = baseNoiseColor;
+      }
+      if (this.shouldSendSubModuleParams('oscB', { color: targetColor }, AudioEngine.MOD_EPS.misc)) {
+        this.oscB.setParams({ color: targetColor });
+      }
+
+      // 5. OSC B Noise Gain Modulation
+      const noiseGainRoute = this.modulationRoutes['oscb-gain'];
+      let targetNoiseGain: number;
+      if (noiseGainRoute && noiseGainRoute.source !== 'manual') {
+        const liveVal = this.computeRouteLiveValue(noiseGainRoute, stage, stageProgress, breathMacro);
+        targetNoiseGain = Math.max(0, Math.min(1, baseNoiseGain * ((1 - noiseGainRoute.depth) + noiseGainRoute.depth * liveVal)));
+      } else {
+        targetNoiseGain = baseNoiseGain;
+      }
+      if (this.shouldSendSubModuleParams('oscB', { gain: targetNoiseGain }, AudioEngine.MOD_EPS.gain)) {
+        this.oscB.setParams({ gain: targetNoiseGain });
       }
     }
 
-    // 7. OSC A Morph & Continuous WT Position Modulation
-    const wtPosRoute = this.modulationRoutes['osca-wt-pos'];
-    const morphRoute = this.modulationRoutes['osca-morph'];
-    if (wtPosRoute && wtPosRoute.source !== 'manual' && this.oscA) {
-      const basePos = this.channelStripState.oscA.wtPosition ?? 0.0;
-      const liveVal = this.computeRouteLiveValue(wtPosRoute, stage, stageProgress, breathMacro);
-      const modOffset = (liveVal - (wtPosRoute.bipolar ? 0 : 0.5)) * wtPosRoute.depth * 0.5;
-      const modPos = Math.max(0, Math.min(1.0, basePos + modOffset));
-      this.oscA.setParams({ wtPosition: modPos });
-    } else if (morphRoute && morphRoute.source !== 'manual' && this.oscA) {
-      const baseMorph = this.channelStripState.oscA.morphDepth ?? 0.7;
-      const liveVal = this.computeRouteLiveValue(morphRoute, stage, stageProgress, breathMacro);
-      const modMorph = Math.max(0, Math.min(1, baseMorph * (1 + (liveVal - 0.5) * morphRoute.depth)));
-      this.oscA.setParams({ morphDepth: modMorph });
+    // 6. Sub Drone Gain Modulation (Independent 432Hz Sub Drone)
+    if (this.drone && !droneBypassed) {
+      const droneRoute = this.modulationRoutes['drone-gain'];
+      let targetDroneGain: number;
+      if (droneRoute && droneRoute.source !== 'manual') {
+        const liveVal = this.computeRouteLiveValue(droneRoute, stage, stageProgress, breathMacro);
+        targetDroneGain = Math.max(0, Math.min(1, baseDroneGain * ((1 - droneRoute.depth) + droneRoute.depth * liveVal)));
+      } else {
+        targetDroneGain = baseDroneGain;
+      }
+      if (this.shouldSendSubModuleParams('drone', { gain: targetDroneGain }, AudioEngine.MOD_EPS.gain)) {
+        this.drone.setParams({ gain: targetDroneGain });
+      }
     }
 
-    // 8. OSC A Harmonics Modulation
-    const harmRoute = this.modulationRoutes['osca-harmonics'];
-    if (harmRoute && harmRoute.source !== 'manual' && this.oscA) {
-      const baseHarm = this.channelStripState.oscA.harmonics ?? 0.5;
-      const liveVal = this.computeRouteLiveValue(harmRoute, stage, stageProgress, breathMacro);
-      const modHarm = Math.max(0, Math.min(1, baseHarm * (1 + (liveVal - 0.5) * harmRoute.depth)));
-      this.oscA.setParams({ harmonics: modHarm });
-    }
+    // 7-9c. OSC A modulation family — skipped entirely when oscA is bypassed
+    if (!oscABypassed && this.oscA) {
+      // Collect all OSC A targets first so we can issue a single batched setParams
+      // and benefit from the epsilon guard at the engine boundary.
+      const oscATargets: Record<string, number> = {};
 
-    // 9. OSC A Level Gain Modulation
-    const oscaGainRoute = this.modulationRoutes['osca-gain'];
-    if (oscaGainRoute && oscaGainRoute.source !== 'manual' && this.oscA) {
-      const baseGain = this.channelStripState.oscA.gain ?? 0.7;
-      const liveVal = this.computeRouteLiveValue(oscaGainRoute, stage, stageProgress, breathMacro);
-      const modGain = Math.max(0, Math.min(1, baseGain * ((1 - oscaGainRoute.depth) + oscaGainRoute.depth * liveVal)));
-      this.oscA.setParams({ gain: modGain });
-    }
+      // 7. OSC A Morph & Continuous WT Position Modulation
+      const wtPosRoute = this.modulationRoutes['osca-wt-pos'];
+      const morphRoute = this.modulationRoutes['osca-morph'];
+      if (wtPosRoute && wtPosRoute.source !== 'manual') {
+        const basePos = this.channelStripState.oscA.wtPosition ?? 0.0;
+        const liveVal = this.computeRouteLiveValue(wtPosRoute, stage, stageProgress, breathMacro);
+        const modOffset = (liveVal - (wtPosRoute.bipolar ? 0 : 0.5)) * wtPosRoute.depth * 0.5;
+        oscATargets.wtPosition = Math.max(0, Math.min(1.0, basePos + modOffset));
+      } else if (morphRoute && morphRoute.source !== 'manual') {
+        const baseMorph = this.channelStripState.oscA.morphDepth ?? 0.7;
+        const liveVal = this.computeRouteLiveValue(morphRoute, stage, stageProgress, breathMacro);
+        oscATargets.morphDepth = Math.max(0, Math.min(1, baseMorph * (1 + (liveVal - 0.5) * morphRoute.depth)));
+      }
 
-    // 9b. OSC A Warp Modulation
-    const oscaWarpRoute = this.modulationRoutes['osca-warp'];
-    if (oscaWarpRoute && oscaWarpRoute.source !== 'manual' && this.oscA) {
-      const baseWarp = this.channelStripState.oscA.warp ?? 0.0;
-      const liveVal = this.computeRouteLiveValue(oscaWarpRoute, stage, stageProgress, breathMacro);
-      const modWarp = Math.max(0, Math.min(1, baseWarp + (liveVal - 0.5) * oscaWarpRoute.depth));
-      this.oscA.setParams({ warp: modWarp });
-    }
+      // 8. OSC A Harmonics Modulation
+      const harmRoute = this.modulationRoutes['osca-harmonics'];
+      if (harmRoute && harmRoute.source !== 'manual') {
+        const baseHarm = this.channelStripState.oscA.harmonics ?? 0.5;
+        const liveVal = this.computeRouteLiveValue(harmRoute, stage, stageProgress, breathMacro);
+        oscATargets.harmonics = Math.max(0, Math.min(1, baseHarm * (1 + (liveVal - 0.5) * harmRoute.depth)));
+      }
 
-    // 9c. OSC A Pan Modulation
-    const oscaPanRoute = this.modulationRoutes['osca-pan'];
-    if (oscaPanRoute && oscaPanRoute.source !== 'manual' && this.oscA) {
-      const basePan = this.channelStripState.oscA.pan ?? 0.0;
-      const liveVal = this.computeRouteLiveValue(oscaPanRoute, stage, stageProgress, breathMacro);
-      const modPan = Math.max(-1.0, Math.min(1.0, basePan + liveVal * oscaPanRoute.depth));
-      this.oscA.setParams({ pan: modPan });
+      // 9. OSC A Level Gain Modulation
+      const oscaGainRoute = this.modulationRoutes['osca-gain'];
+      if (oscaGainRoute && oscaGainRoute.source !== 'manual') {
+        const baseGain = this.channelStripState.oscA.gain ?? 0.7;
+        const liveVal = this.computeRouteLiveValue(oscaGainRoute, stage, stageProgress, breathMacro);
+        oscATargets.gain = Math.max(0, Math.min(1, baseGain * ((1 - oscaGainRoute.depth) + oscaGainRoute.depth * liveVal)));
+      }
+
+      // 9b. OSC A Warp Modulation
+      const oscaWarpRoute = this.modulationRoutes['osca-warp'];
+      if (oscaWarpRoute && oscaWarpRoute.source !== 'manual') {
+        const baseWarp = this.channelStripState.oscA.warp ?? 0.0;
+        const liveVal = this.computeRouteLiveValue(oscaWarpRoute, stage, stageProgress, breathMacro);
+        oscATargets.warp = Math.max(0, Math.min(1, baseWarp + (liveVal - 0.5) * oscaWarpRoute.depth));
+      }
+
+      // 9c. OSC A Pan Modulation
+      const oscaPanRoute = this.modulationRoutes['osca-pan'];
+      if (oscaPanRoute && oscaPanRoute.source !== 'manual') {
+        const basePan = this.channelStripState.oscA.pan ?? 0.0;
+        const liveVal = this.computeRouteLiveValue(oscaPanRoute, stage, stageProgress, breathMacro);
+        oscATargets.pan = Math.max(-1.0, Math.min(1.0, basePan + liveVal * oscaPanRoute.depth));
+      }
+
+      if (Object.keys(oscATargets).length > 0 && this.shouldSendSubModuleParams('oscA', oscATargets, AudioEngine.MOD_EPS.misc)) {
+        this.oscA.setParams(oscATargets as Partial<ChannelStripParams['oscA']>);
+      }
     }
 
     // 10. Master Stereo Pan Modulation
@@ -930,67 +1059,89 @@ export class AudioEngine implements AudioEngineApi {
     if (panRoute && panRoute.source !== 'manual' && this.panner) {
       const liveVal = this.computeRouteLiveValue(panRoute, stage, stageProgress, breathMacro);
       const modPan = Math.max(-1.0, Math.min(1.0, basePan + liveVal * panRoute.depth));
-      this.panner.pan.setTargetAtTime(modPan, now, 0.008);
+      this.scheduleParamGuarded('master.pan', this.panner.pan, modPan, now, 0.008, AudioEngine.MOD_EPS.pan);
     } else if (this.panner) {
-      this.panner.pan.setTargetAtTime(basePan, now, 0.008);
+      this.scheduleParamGuarded('master.pan', this.panner.pan, basePan, now, 0.008, AudioEngine.MOD_EPS.pan);
     }
 
     // 11. OSC A Detune Modulation
     const detuneRoute = this.modulationRoutes['osca-detune'];
-    if (detuneRoute && detuneRoute.source !== 'manual' && this.oscA) {
+    if (!oscABypassed && detuneRoute && detuneRoute.source !== 'manual' && this.oscA) {
       const baseDetune = this.channelStripState.oscA.detune ?? 0;
       const liveVal = this.computeRouteLiveValue(detuneRoute, stage, stageProgress, breathMacro);
       const modDetune = Math.max(-50, Math.min(50, baseDetune + liveVal * detuneRoute.depth * 25));
-      this.oscA.setParams({ detune: modDetune });
+      if (this.shouldSendSubModuleParams('oscA', { detune: modDetune }, 0.05)) {
+        this.oscA.setParams({ detune: modDetune });
+      }
     }
 
     // 12. Drone Pitch Drift Modulation
-    const driftRoute = this.modulationRoutes['drone-drift'];
-    if (driftRoute && driftRoute.source !== 'manual' && this.drone) {
-      const baseDrift = this.channelStripState.drone.pitchDrift ?? 0.5;
-      const liveVal = this.computeRouteLiveValue(driftRoute, stage, stageProgress, breathMacro);
-      const modDrift = Math.max(0, Math.min(1, baseDrift + (liveVal - (driftRoute.bipolar ? 0 : 0.5)) * driftRoute.depth));
-      this.drone.setParams({ pitchDrift: modDrift });
-    } else if (this.drone && this.channelStripState.drone.pitchDrift !== undefined) {
-      this.drone.setParams({ pitchDrift: this.channelStripState.drone.pitchDrift });
+    if (!droneBypassed) {
+      const driftRoute = this.modulationRoutes['drone-drift'];
+      let targetDrift: number | undefined;
+      if (driftRoute && driftRoute.source !== 'manual' && this.drone) {
+        const baseDrift = this.channelStripState.drone.pitchDrift ?? 0.5;
+        const liveVal = this.computeRouteLiveValue(driftRoute, stage, stageProgress, breathMacro);
+        targetDrift = Math.max(0, Math.min(1, baseDrift + (liveVal - (driftRoute.bipolar ? 0 : 0.5)) * driftRoute.depth));
+      } else if (this.drone && this.channelStripState.drone.pitchDrift !== undefined) {
+        targetDrift = this.channelStripState.drone.pitchDrift;
+      }
+      if (targetDrift !== undefined && this.drone && this.shouldSendSubModuleParams('drone', { pitchDrift: targetDrift }, AudioEngine.MOD_EPS.misc)) {
+        this.drone.setParams({ pitchDrift: targetDrift });
+      }
     }
 
     // 13. Reverb Wet Mix Modulation
-    const reverbMixRoute = this.modulationRoutes['reverb-mix'];
-    if (reverbMixRoute && reverbMixRoute.source !== 'manual' && this.reverb) {
-      const baseMix = this.effectsState.reverb.mix;
-      const liveVal = this.computeRouteLiveValue(reverbMixRoute, stage, stageProgress, breathMacro);
-      const modMix = Math.max(0, Math.min(1, baseMix * ((1 - reverbMixRoute.depth) + reverbMixRoute.depth * liveVal)));
-      this.reverb.setParams({ mix: modMix });
-    } else if (this.reverb) {
-      this.reverb.setParams({ mix: this.effectsState.reverb.mix });
+    if (!reverbBypassed) {
+      const reverbMixRoute = this.modulationRoutes['reverb-mix'];
+      let targetReverbMix: number | undefined;
+      if (reverbMixRoute && reverbMixRoute.source !== 'manual' && this.reverb) {
+        const baseMix = this.effectsState.reverb.mix;
+        const liveVal = this.computeRouteLiveValue(reverbMixRoute, stage, stageProgress, breathMacro);
+        targetReverbMix = Math.max(0, Math.min(1, baseMix * ((1 - reverbMixRoute.depth) + reverbMixRoute.depth * liveVal)));
+      } else if (this.reverb) {
+        targetReverbMix = this.effectsState.reverb.mix;
+      }
+      if (targetReverbMix !== undefined && this.reverb && this.shouldSendSubModuleParams('reverb', { mix: targetReverbMix }, AudioEngine.MOD_EPS.mixLevel)) {
+        this.reverb.setParams({ mix: targetReverbMix });
+      }
     }
 
     // 14. Delay Wet Mix Modulation
-    const delayMixRoute = this.modulationRoutes['delay-mix'];
-    if (delayMixRoute && delayMixRoute.source !== 'manual' && this.delay) {
-      const baseMix = this.effectsState.delay.mix;
-      const liveVal = this.computeRouteLiveValue(delayMixRoute, stage, stageProgress, breathMacro);
-      const modMix = Math.max(0, Math.min(1, baseMix * ((1 - delayMixRoute.depth) + delayMixRoute.depth * liveVal)));
-      this.delay.setParams({ mix: modMix });
-    } else if (this.delay) {
-      this.delay.setParams({ mix: this.effectsState.delay.mix });
+    if (!delayBypassed) {
+      const delayMixRoute = this.modulationRoutes['delay-mix'];
+      let targetDelayMix: number | undefined;
+      if (delayMixRoute && delayMixRoute.source !== 'manual' && this.delay) {
+        const baseMix = this.effectsState.delay.mix;
+        const liveVal = this.computeRouteLiveValue(delayMixRoute, stage, stageProgress, breathMacro);
+        targetDelayMix = Math.max(0, Math.min(1, baseMix * ((1 - delayMixRoute.depth) + delayMixRoute.depth * liveVal)));
+      } else if (this.delay) {
+        targetDelayMix = this.effectsState.delay.mix;
+      }
+      if (targetDelayMix !== undefined && this.delay && this.shouldSendSubModuleParams('delay', { mix: targetDelayMix }, AudioEngine.MOD_EPS.mixLevel)) {
+        this.delay.setParams({ mix: targetDelayMix });
+      }
     }
 
     // 15. Drive Saturation Modulation
-    const driveRoute = this.modulationRoutes['drive-amount'];
-    if (driveRoute && driveRoute.source !== 'manual' && this.drive) {
-      const baseAmount = this.effectsState.drive.amount;
-      const liveVal = this.computeRouteLiveValue(driveRoute, stage, stageProgress, breathMacro);
-      const modAmount = Math.max(0, Math.min(1, baseAmount * (1 + (liveVal - 0.5) * driveRoute.depth)));
-      this.drive.setParams({ amount: modAmount });
-    } else if (this.drive) {
-      this.drive.setParams({ amount: this.effectsState.drive.amount });
+    if (!driveBypassed) {
+      const driveRoute = this.modulationRoutes['drive-amount'];
+      let targetDriveAmount: number | undefined;
+      if (driveRoute && driveRoute.source !== 'manual' && this.drive) {
+        const baseAmount = this.effectsState.drive.amount;
+        const liveVal = this.computeRouteLiveValue(driveRoute, stage, stageProgress, breathMacro);
+        targetDriveAmount = Math.max(0, Math.min(1, baseAmount * (1 + (liveVal - 0.5) * driveRoute.depth)));
+      } else if (this.drive) {
+        targetDriveAmount = this.effectsState.drive.amount;
+      }
+      if (targetDriveAmount !== undefined && this.drive && this.shouldSendSubModuleParams('drive', { amount: targetDriveAmount }, AudioEngine.MOD_EPS.misc)) {
+        this.drive.setParams({ amount: targetDriveAmount });
+      }
     }
 
     // 16. Preamp Gain Modulation
     const gainRoute = this.modulationRoutes['preamp-gain'];
-    if (this.gainModule) {
+    if (this.gainModule && this.gainModule.getParams().bypass !== true) {
       const currentGain = this.gainModule.getParams().value;
       if (gainRoute && gainRoute.source !== 'manual') {
         const baseGain = this.effectsState.gain?.value ?? 0.0;
@@ -1008,7 +1159,9 @@ export class AudioEngine implements AudioEngineApi {
     }
 
     // 17-20. Granular Rate, Density, Gain & Scan Position Modulation (batched single update)
-    if (this.granular) {
+    // Skip when granular is bypassed — GranularChannel already stops its scheduler on bypass,
+    // so pushing setParams to it is wasted main-thread work.
+    if (this.granular && !granularBypassed) {
       const granState = this.channelStripState.granular;
       const granularUpdates: Partial<NonNullable<ChannelStripParams['granular']>> = {};
 
@@ -1048,7 +1201,16 @@ export class AudioEngine implements AudioEngineApi {
         granularUpdates.position = granState.position;
       }
 
-      this.granular.setParams(granularUpdates);
+      if (Object.keys(granularUpdates).length > 0) {
+        const numericUpdates: Record<string, number> = {};
+        for (const k of Object.keys(granularUpdates)) {
+          const v = (granularUpdates as Record<string, unknown>)[k];
+          if (typeof v === 'number') numericUpdates[k] = v;
+        }
+        if (Object.keys(numericUpdates).length > 0 && this.shouldSendSubModuleParams('granular', numericUpdates, AudioEngine.MOD_EPS.misc)) {
+          this.granular.setParams(granularUpdates);
+        }
+      }
     }
   }
 
@@ -1763,6 +1925,7 @@ export class AudioEngine implements AudioEngineApi {
     }
     if (mod) {
       this.effectModules.set(effectId, mod);
+      this.filterModuleCacheDirty = true;
     }
     return mod;
   }
@@ -2054,6 +2217,8 @@ export class AudioEngine implements AudioEngineApi {
     this.sources.clear();
     this.effectModules.clear();
     this.effectModuleParams.clear();
+    this.filterModuleCache = [];
+    this.filterModuleCacheDirty = true;
 
     const routingNodes = [...this.sourceRouteGains.values()].flatMap(gains => [
       gains.toA, gains.toB, gains.toThru

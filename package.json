@@ -1,7 +1,7 @@
 {
   "name": "synhale",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.4",
   "description": "半模块化呼吸声疗数字合成器 · A semi-modular breath synthesizer",
   "author": "met-tk",
   "type": "module",
@@ -38,10 +38,14 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Synhale"
+      "shortcutName": "Synhale",
+      "include": "build/installer.nsh"
     }
   },
   "dependencies": {
+    "@capacitor/android": "^8.5.3",
+    "@capacitor/cli": "^8.5.3",
+    "@capacitor/core": "^8.5.3",
     "lucide-react": "^0.475.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"

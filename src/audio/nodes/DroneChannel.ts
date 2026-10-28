@@ -87,6 +87,10 @@ export class DroneChannel implements AudioSourceNode {
 
   start(when = 0): void {
     if (this.isStarted || this.isDisposed) return;
+    // OscillatorNode cannot be restarted after stop(); rebuild fresh nodes if needed.
+    if (this.oscillatorsStopped) {
+      this.rebuildOscillators();
+    }
     this.isStarted = true;
     this.droneOsc.start(when);
     this.lfoOsc.start(when);
@@ -97,10 +101,43 @@ export class DroneChannel implements AudioSourceNode {
     try {
       this.droneOsc.stop(when);
       this.lfoOsc.stop(when);
+      this.oscillatorsStopped = true;
     } catch {
       // Ignore if already stopped
     }
     this.isStarted = false;
+  }
+
+  private oscillatorsStopped = false;
+
+  /**
+   * Recreates droneOsc + lfoOsc after a hard stop (Web Audio oscillators are single-use).
+   * Disconnects the old (now-stopped) nodes and wires fresh ones into the existing chain.
+   * The downstream chain (warmthShaper/subFilter/trackGain/bypassGain) is untouched.
+   */
+  private rebuildOscillators(): void {
+    try {
+      this.droneOsc.disconnect();
+      this.lfoOsc.disconnect();
+      this.lfoGain.disconnect();
+    } catch { /* already disconnected */ }
+
+    this.droneOsc = this.ctx.createOscillator();
+    this.droneOsc.type = 'sine';
+    this.droneOsc.frequency.value = this.currentParams.baseFreq;
+
+    this.lfoOsc = this.ctx.createOscillator();
+    this.lfoOsc.type = 'sine';
+    this.lfoOsc.frequency.value = 0.05;
+
+    this.lfoGain = this.ctx.createGain();
+    this.lfoGain.gain.value = this.currentParams.pitchDrift * 4.0;
+
+    this.lfoOsc.connect(this.lfoGain);
+    this.lfoGain.connect(this.droneOsc.detune);
+    this.droneOsc.connect(this.warmthShaper);
+
+    this.oscillatorsStopped = false;
   }
 
   setParams(params: Partial<ChannelStripParams['drone']>): void {
@@ -131,6 +168,18 @@ export class DroneChannel implements AudioSourceNode {
       this.bypassGain.gain.cancelScheduledValues(now);
       this.bypassGain.gain.setValueAtTime(this.bypassGain.gain.value, now);
       this.bypassGain.gain.linearRampToValueAtTime(targetGain, now + 0.005);
+
+      // Deep bypass: stop oscillators after the 5ms ramp reaches zero so the audio
+      // thread no longer evaluates them while bypassed. start() rebuilds fresh
+      // OscillatorNodes when the user re-enables the module.
+      if (params.bypass && this.isStarted) {
+        setTimeout(() => {
+          if (this.isDisposed || !this.currentParams.bypass) return;
+          this.stop(this.ctx.currentTime);
+        }, 8);
+      } else if (!params.bypass && !this.isStarted) {
+        this.start(this.ctx.currentTime);
+      }
     }
   }
 

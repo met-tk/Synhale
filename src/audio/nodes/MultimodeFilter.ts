@@ -129,6 +129,10 @@ export class MultimodeFilter implements AudioEffectNode {
       this.filterOutGain.gain.cancelScheduledValues(now);
       this.filterOutGain.gain.setValueAtTime(this.filterOutGain.gain.value, now);
       this.filterOutGain.gain.linearRampToValueAtTime(wetTarget, now + 0.005);
+
+      // NOTE: We deliberately DO NOT disconnect the biquad cascade. BiquadFilterNode
+      // holds internal z^-1/z^-2 state; topology changes cause audible clicks ("滋滋声").
+      // The filterInGain / filterOutGain / bypassDryGain relay above already silences it.
     }
   }
 

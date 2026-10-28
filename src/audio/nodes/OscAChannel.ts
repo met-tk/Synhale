@@ -27,6 +27,7 @@ import {
   MULTI_FRAME_WAVETABLES,
   resolveMultiFramePosition
 } from '../dsp/wavetableData';
+import { getPerformanceBudget } from '../../performance/budget';
 
 /**
  * Calibrated acoustic scale factor for OscAChannel.
@@ -150,7 +151,9 @@ export class OscAChannel implements AudioSourceNode {
     this.trackGain = ctx.createGain();
 
     this.warpShaper = ctx.createWaveShaper();
-    this.warpShaper.oversample = '4x';
+    // 过采样随性能预算降级 (high:4x / medium:2x / low:none),低端设备省 CPU
+    const tier = getPerformanceBudget().tier;
+    this.warpShaper.oversample = tier === 'high' ? '4x' : tier === 'medium' ? '2x' : 'none';
     this.applyWarpCurve(this.currentParams.warp ?? 0.0, this.currentParams.warpMode ?? 'off');
 
     this.harmonicFilter = ctx.createBiquadFilter();
@@ -159,7 +162,7 @@ export class OscAChannel implements AudioSourceNode {
     this.harmonicFilter.Q.value = 0.707;
 
     this.warmthShaper = ctx.createWaveShaper();
-    this.warmthShaper.oversample = '4x';
+    this.warmthShaper.oversample = tier === 'high' ? '4x' : tier === 'medium' ? '2x' : 'none';
     this.applyWarmthCurve(this.currentParams.warmth ?? 0.1);
 
     this.channelPanner = ctx.createStereoPanner();
@@ -451,6 +454,14 @@ export class OscAChannel implements AudioSourceNode {
       this.bypassGain.gain.cancelScheduledValues(now);
       this.bypassGain.gain.setValueAtTime(this.bypassGain.gain.value, now);
       this.bypassGain.gain.linearRampToValueAtTime(targetBypassGain, now + 0.005);
+
+      // NOTE: We deliberately DO NOT disconnect any node in the conditioning chain
+      // (trackGain -> warpShaper -> harmonicFilter -> warmthShaper -> channelPanner).
+      // Topology changes on nodes whose upstream is still actively producing signal —
+      // even at low levels during the 5ms bypassGain ramp — cause audible clicks
+      // ("滋滋声") in Chromium-based WebView. The bypassGain relay above already
+      // silences the channel; residual CPU cost of an idle WaveShaper with zero input
+      // is far smaller than the click risk.
     }
 
     // Harmless storage of legacy fields for parameter contract compliance
@@ -602,12 +613,22 @@ export class OscAChannel implements AudioSourceNode {
     const dominantSlice = alpha < 0.5 ? slice1 : slice2;
 
     if (this.waves.length > 0) {
+      // Two-stage wave swap: pre-damp gain to near-zero before setPeriodicWave to avoid
+      // an audible discontinuity while setTargetAtTime is still converging exponentially.
+      const swapDamp = 0.0001;
+      const swapSettle = 0.003; // 3ms settle before wave swap
       if (sliceOsc1 !== this.lastSliceOsc1) {
+        this.gain1.gain.cancelScheduledValues(now);
+        this.gain1.gain.setValueAtTime(this.gain1.gain.value, now);
+        this.gain1.gain.linearRampToValueAtTime(swapDamp, now + swapSettle);
         const safeWave1 = this.waves[sliceOsc1] ?? this.waves[0];
         this.osc1.setPeriodicWave(safeWave1);
         this.lastSliceOsc1 = sliceOsc1;
       }
       if (sliceOsc2 !== this.lastSliceOsc2) {
+        this.gain2.gain.cancelScheduledValues(now);
+        this.gain2.gain.setValueAtTime(this.gain2.gain.value, now);
+        this.gain2.gain.linearRampToValueAtTime(swapDamp, now + swapSettle);
         const safeWave2 = this.waves[sliceOsc2] ?? this.waves[0];
         this.osc2.setPeriodicWave(safeWave2);
         this.lastSliceOsc2 = sliceOsc2;
@@ -621,8 +642,9 @@ export class OscAChannel implements AudioSourceNode {
       }
     }
 
-    this.gain1.gain.setTargetAtTime(gOsc1, now, 0.015);
-    this.gain2.gain.setTargetAtTime(gOsc2, now, 0.015);
+    // Resume exponential convergence to the equal-power targets
+    this.gain1.gain.setTargetAtTime(gOsc1, now + 0.004, 0.015);
+    this.gain2.gain.setTargetAtTime(gOsc2, now + 0.004, 0.015);
   }
 
   /**

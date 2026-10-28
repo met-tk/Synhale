@@ -1,4 +1,10 @@
 import '@testing-library/jest-dom/vitest';
+import { __forceTierForTests } from '../src/performance/budget';
+
+// 性能预算回归基线:测试环境固定为旗舰桌面档 (high tier)。
+// 回归测试断言的是满血画质/DSP 精度;低端降级行为由 budget 专属测试显式覆盖。
+// 直接注入缓存而非覆写 navigator —— jsdom 环境下 navigator 属性桩不可靠。
+__forceTierForTests('high');
 
 if (typeof window !== 'undefined') {
   if (!window.PointerEvent) {

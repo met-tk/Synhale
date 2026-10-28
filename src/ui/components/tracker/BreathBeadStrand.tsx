@@ -6,13 +6,16 @@ export interface BreathBeadStrandProps {
   cycleProgress: number; // 0..1 progress within the current cycle
   isPlaying: boolean;
   isDarkTheme?: boolean;
+  /** 'left': vertical mala on the left edge; 'top': horizontal strand across the top. */
+  position?: 'left' | 'top';
 }
 
 /**
  * BreathBeadStrand:
  * Ambient, number-free breath cycle counter threaded along the left edge of the
- * playback stage — a vertical mala of beads on a fine cord.
- * - Completed cycle: one softly glowing bead, accumulating bottom-up.
+ * playback stage — a vertical mala of beads on a fine cord (or a horizontal
+ * strand across the top on touch-first layouts).
+ * - Completed cycle: one softly glowing bead, accumulating bottom-up / left-to-right.
  * - Current cycle: a ghost bead filling from its base with cycleProgress.
  * - Strand full: the whole mala breathes once (collective dim & glow), then the
  *   session concludes (playback pauses; pressing play begins a fresh strand).
@@ -27,11 +30,13 @@ export const BreathBeadStrand: React.FC<BreathBeadStrandProps> = ({
   cycleCount,
   cycleProgress,
   isPlaying,
-  isDarkTheme = true
+  isDarkTheme = true,
+  position = 'left'
 }) => {
   const clipId = useId();
+  const horizontal = position === 'top';
 
-  const safeCapacity = Math.max(1, Math.min(48, Math.round(Number.isFinite(capacity) ? capacity : 1)));
+  const safeCapacity = Math.max(1, Math.min(48, Number.isFinite(capacity) ? capacity : 1));
   const completed = Math.max(0, Math.min(safeCapacity, Number.isFinite(cycleCount) ? Math.floor(cycleCount) : 0));
   const progress = Number.isFinite(cycleProgress) ? Math.max(0, Math.min(1, cycleProgress)) : 0;
   const isFull = completed >= safeCapacity;
@@ -39,15 +44,16 @@ export const BreathBeadStrand: React.FC<BreathBeadStrandProps> = ({
 
   const layout = useMemo(() => {
     // Fixed cord length in viewBox units; beads string out evenly regardless of capacity.
-    const strandHeight = 520;
+    const cordLength = 520;
     const pad = 24;
-    const usable = strandHeight - pad * 2;
+    const usable = cordLength - pad * 2;
     const spacing = safeCapacity > 1 ? usable / (safeCapacity - 1) : 0;
     const radius = Math.max(3, Math.min(7, spacing * 0.3));
-    const cordX = 14;
-    const slotY = (i: number) => strandHeight - pad - i * spacing; // bottom-up growth
-    return { strandHeight, spacing, radius, cordX, slotY, overhang: Math.min(14, spacing * 0.5 + 6) };
-  }, [safeCapacity]);
+    // Vertical grows bottom-up; horizontal grows left-to-right (reading direction).
+    const slot = (i: number) =>
+      horizontal ? pad + i * spacing : cordLength - pad - i * spacing;
+    return { cordLength, spacing, radius, slot, overhang: Math.min(14, spacing * 0.5 + 6), horizontal };
+  }, [safeCapacity, horizontal]);
 
   // Monochrome palette driven by theme: white pearls on dark, ink pearls on light.
   const palette = useMemo(() => {
@@ -69,56 +75,90 @@ export const BreathBeadStrand: React.FC<BreathBeadStrandProps> = ({
   const activeStroke = isDarkTheme ? 'rgba(255, 255, 255, 0.34)' : 'rgba(0, 0, 0, 0.34)';
 
   const lastLitBead = completed - 1;
-  const activeCy = activeIndex >= 0 ? layout.slotY(activeIndex) : 0;
-  const fillHeight = layout.radius * 2 * progress;
+  const activeSlot = activeIndex >= 0 ? layout.slot(activeIndex) : 0;
+  const fillLength = layout.radius * 2 * progress;
 
   return (
     <div
       data-testid="breath-bead-strand"
       role="img"
       aria-label={`呼吸念珠：已完成 ${completed} / ${safeCapacity} 个呼吸周期`}
-      className="absolute left-5 top-1/2 -translate-y-1/2 z-10 pointer-events-none select-none"
+      className={
+        horizontal
+          ? 'absolute top-6 left-1/2 -translate-x-1/2 z-10 pointer-events-none select-none'
+          : 'absolute left-5 top-1/2 -translate-y-1/2 z-10 pointer-events-none select-none'
+      }
       style={{ opacity: isPlaying ? 1 : 0.45, transition: 'opacity 300ms ease' }}
     >
       <svg
-        width={28}
-        height={layout.strandHeight}
-        viewBox={`0 0 28 ${layout.strandHeight}`}
-        style={{ height: 'min(68vh, 520px)', width: 'auto', overflow: 'visible' }}
+        width={horizontal ? layout.cordLength : 28}
+        height={horizontal ? 28 : layout.cordLength}
+        viewBox={
+          horizontal
+            ? `0 0 ${layout.cordLength} 28`
+            : `0 0 28 ${layout.cordLength}`
+        }
+        style={
+          horizontal
+            ? { width: 'min(78vw, 520px)', height: 'auto', overflow: 'visible' }
+            : { height: 'min(68vh, 520px)', width: 'auto', overflow: 'visible' }
+        }
         aria-hidden="true"
       >
         <defs>
           <clipPath id={clipId}>
             {/* Rising fill window inside the active bead, anchored to its base */}
-            <rect
-              x={layout.cordX - layout.radius - 1}
-              y={activeCy + layout.radius - fillHeight}
-              width={layout.radius * 2 + 2}
-              height={fillHeight}
-            />
+            {horizontal ? (
+              <rect
+                x={activeSlot - layout.radius - 1}
+                y={14 - layout.radius - 1}
+                width={fillLength}
+                height={layout.radius * 2 + 2}
+              />
+            ) : (
+              <rect
+                x={14 - layout.radius - 1}
+                y={activeSlot + layout.radius - fillLength}
+                width={layout.radius * 2 + 2}
+                height={fillLength}
+              />
+            )}
           </clipPath>
         </defs>
 
         <g className={isFull ? 'synhale-strand-breathe' : undefined}>
           {/* The cord */}
-          <line
-            x1={layout.cordX}
-            y1={layout.slotY(safeCapacity - 1) - layout.overhang}
-            x2={layout.cordX}
-            y2={layout.slotY(0) + layout.overhang}
-            stroke={cordStroke}
-            strokeWidth={1}
-          />
+          {horizontal ? (
+            <line
+              x1={layout.slot(safeCapacity - 1) - layout.overhang}
+              y1={14}
+              x2={layout.slot(0) + layout.overhang}
+              y2={14}
+              stroke={cordStroke}
+              strokeWidth={1}
+            />
+          ) : (
+            <line
+              x1={14}
+              y1={layout.slot(safeCapacity - 1) - layout.overhang}
+              x2={14}
+              y2={layout.slot(0) + layout.overhang}
+              stroke={cordStroke}
+              strokeWidth={1}
+            />
+          )}
 
           {Array.from({ length: safeCapacity }, (_, i) => {
-            const cy = layout.slotY(i);
+            const cordPos = layout.slot(i);
             const isCompleted = i < completed;
             const isActive = i === activeIndex;
+            const cx = horizontal ? cordPos : 14;
+            const cy = horizontal ? 14 : cordPos;
             return (
               <g key={i}>
                 {isCompleted && (
                   <circle
-                    cx={layout.cordX}
+                    cx={cx}
                     cy={cy}
                     r={layout.radius}
                     fill={palette.beadFill}
@@ -130,7 +170,7 @@ export const BreathBeadStrand: React.FC<BreathBeadStrandProps> = ({
                 {isActive && (
                   <>
                     <circle
-                      cx={layout.cordX}
+                      cx={cx}
                       cy={cy}
                       r={layout.radius}
                       fill="none"
@@ -139,7 +179,7 @@ export const BreathBeadStrand: React.FC<BreathBeadStrandProps> = ({
                     />
                     {progress > 0.001 && (
                       <circle
-                        cx={layout.cordX}
+                        cx={cx}
                         cy={cy}
                         r={layout.radius}
                         fill={palette.activeFill}
@@ -151,7 +191,7 @@ export const BreathBeadStrand: React.FC<BreathBeadStrandProps> = ({
                 )}
                 {!isCompleted && !isActive && (
                   <circle
-                    cx={layout.cordX}
+                    cx={cx}
                     cy={cy}
                     r={layout.radius}
                     fill="none"

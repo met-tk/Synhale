@@ -205,6 +205,8 @@ describe('Milestone 4 (D27 - D33) Deep Adversarial Stress Suite', () => {
         mockCtx.save.mockClear();
         mockCtx.restore.mockClear();
         window.devicePixelRatio = dpr;
+        // 性能预算: high tier maxDpr=2, 超过 2 的 DPR 会被封顶
+        const cappedDpr = Math.min(dpr, 2);
 
         const { unmount } = render(
           React.createElement(
@@ -215,7 +217,7 @@ describe('Milestone 4 (D27 - D33) Deep Adversarial Stress Suite', () => {
         );
 
         expect(mockCtx.save).toHaveBeenCalled();
-        expect(mockCtx.scale).toHaveBeenCalledWith(dpr, dpr);
+        expect(mockCtx.scale).toHaveBeenCalledWith(cappedDpr, cappedDpr);
         expect(mockCtx.restore).toHaveBeenCalled();
 
         unmount();

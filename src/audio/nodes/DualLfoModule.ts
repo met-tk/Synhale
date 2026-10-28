@@ -171,6 +171,10 @@ export class DualLfoModule {
 
     if (params.bypass !== undefined) {
       this.currentLfo1.bypass = params.bypass;
+      // NOTE: We deliberately DO NOT disconnect oscLfo1 from lfo1DepthGain.
+      // Topology changes on actively-running oscillator nodes cause audible clicks
+      // ("滋滋声") in Chromium-based WebView. The depth gain above already silences
+      // the LFO contribution (set to 0), which is the standard & click-free approach.
     }
 
     const targetGain = this.currentLfo1.bypass ? 0 : this.currentLfo1.depth * 25.0;
@@ -221,6 +225,7 @@ export class DualLfoModule {
 
     if (params.bypass !== undefined) {
       this.currentLfo2.bypass = params.bypass;
+      // See note in setLfo1Params — no topology change on active oscillators.
     }
 
     const effectiveDepth = this.currentLfo2.bypass ? 0 : this.currentLfo2.depth;

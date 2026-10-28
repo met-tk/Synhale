@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import type { LfoShape } from '../../../types/audio';
 import { evaluateLfoWaveform } from '../../../audio/dsp/lfoMath';
 import { readAccent, readAccentRgb } from '../../theme/deckPalette';
+import { createBudgetFrameGate } from '../../../performance/budget';
 
 export interface SerumLfoScopeProps {
   id: string;
@@ -80,11 +81,14 @@ export const SerumLfoScope: React.FC<SerumLfoScopeProps> = ({
     if (!isPlaying) return;
     let animId: number;
     let lastT = performance.now();
-
+    // 低端设备帧率上限,相位基于 dt 累加,跳帧不丢相位
+    const frameGate = createBudgetFrameGate();
     const tick = (now: number) => {
       const dt = (now - lastT) / 1000;
       lastT = now;
-      setPlayheadPhase(prev => (prev + dt * rate) % 1.0);
+      if (frameGate(now)) {
+        setPlayheadPhase(prev => (prev + dt * rate) % 1.0);
+      }
       animId = requestAnimationFrame(tick);
     };
 

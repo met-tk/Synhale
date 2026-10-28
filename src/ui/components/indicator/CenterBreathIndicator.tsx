@@ -68,6 +68,8 @@ export const CenterBreathIndicator: React.FC<CenterBreathIndicatorProps> = ({
     : {};
 
   // Theme & Stage glow classes (100% Pure Monochrome, Zero Color Tint)
+  // Drop-shadow only applies when breathing is actively running — at idle/boot
+  // (stage undefined) the indicator should sit silently without any halo remnant.
   const appearanceClasses = useMemo(() => {
     if (isHoldOut) {
       // Hollow, quiet, void state with zero glow
@@ -81,11 +83,18 @@ export const CenterBreathIndicator: React.FC<CenterBreathIndicatorProps> = ({
         : 'text-neutral-950 hover:text-black';
     }
 
-    // Normal Inhale / Exhale / Idle: pure monochrome soft light
+    // Idle / boot-up: no drop-shadow halo (avoid stale "previous version" ring artifact)
+    if (!isPlaying) {
+      return isDarkTheme
+        ? 'text-zinc-100 hover:text-white'
+        : 'text-neutral-900 hover:text-neutral-950';
+    }
+
+    // Actively breathing (inhale / exhale): pure monochrome soft light halo
     return isDarkTheme
       ? 'text-zinc-100 drop-shadow-[0_0_10px_rgba(255,255,255,0.18)] hover:text-white'
       : 'text-neutral-900 drop-shadow-[0_0_8px_rgba(0,0,0,0.1)] hover:text-neutral-950';
-  }, [isHoldIn, isHoldOut, isDarkTheme]);
+  }, [isHoldIn, isHoldOut, isDarkTheme, isPlaying]);
 
   // Keep hooks in a stable order when the visibility preference changes.
   if (alpha <= 0) return null;
@@ -148,7 +157,7 @@ export const CenterBreathIndicator: React.FC<CenterBreathIndicatorProps> = ({
           opacity: alpha,
           transition: 'transform 120ms cubic-bezier(0.2, 0, 0, 1), opacity 200ms ease'
         }}
-        className={`relative pointer-events-auto cursor-pointer flex flex-col items-center justify-center rounded-full p-6 transition-all duration-300 focus:outline-none focus:ring-1 focus:ring-zinc-400/40 ${appearanceClasses}`}
+        className={`relative pointer-events-auto cursor-pointer flex flex-col items-center justify-center rounded-full p-6 transition-all duration-300 outline-none focus:outline-none focus-visible:ring-1 focus-visible:ring-zinc-400/40 ${appearanceClasses}`}
       >
         {/* Hold In: Monochromatic Outward Wave Ripple Emitted on Each 1.0s Beat (Strict 1:1 Perfect Circle) */}
         {isHoldIn && (

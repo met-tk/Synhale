@@ -63,15 +63,16 @@ describe('CanvasRenderer Unit Tests', () => {
 
       const result = setupCanvasDPI(canvas, ctx);
 
-      expect(result.dpr).toBe(2.5);
+      // 性能预算: high tier maxDpr=2, 2.5 会被封顶为 2
+      expect(result.dpr).toBe(2);
       expect(result.width).toBe(800);
       expect(result.height).toBe(600);
-      expect(canvas.width).toBe(2000);
-      expect(canvas.height).toBe(1500);
+      expect(canvas.width).toBe(1600);
+      expect(canvas.height).toBe(1200);
       expect(canvas.style.width).toBe('800px');
       expect(canvas.style.height).toBe('600px');
       expect(ctx.resetTransform).toHaveBeenCalled();
-      expect(ctx.scale).toHaveBeenCalledWith(2.5, 2.5);
+      expect(ctx.scale).toHaveBeenCalledWith(2, 2);
     } finally {
       Object.defineProperty(window, 'devicePixelRatio', { value: originalDpr, configurable: true });
     }

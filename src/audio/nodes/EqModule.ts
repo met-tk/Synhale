@@ -254,6 +254,11 @@ export class EqModule implements AudioEffectNode {
     this.bypassDryGain.gain.cancelScheduledValues(now);
     this.bypassDryGain.gain.setValueAtTime(this.bypassDryGain.gain.value, now);
     this.bypassDryGain.gain.linearRampToValueAtTime(targetDry, now + fadeDuration);
+
+    // NOTE: We deliberately DO NOT disconnect the biquad cascade. Each BiquadFilterNode
+    // has internal z^-1/z^-2 delay state; cutting the cascade mid-stream causes the
+    // state to restart from zero on re-attach, producing audible clicks ("滋滋声").
+    // The eqInGain / eqOutGain / bypassDryGain relay above already silences the chain.
   }
 
   /**

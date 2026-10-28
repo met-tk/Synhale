@@ -3,6 +3,7 @@ import { useTheme } from '../../theme';
 import { readAccent, readAccentRgb } from '../../theme/deckPalette';
 import { getCachedSamplePeaks, registerCustomAudioSample, getSampleDuration, MAX_IMPORTED_AUDIO_BYTES } from '../../../audio/nodes/GranularSampleLibrary';
 import type { ParticleVisualGrain } from '../../../audio/nodes/GranularChannel';
+import { getPerformanceBudget, capDpr, createBudgetFrameGate } from '../../../performance/budget';
 
 interface GrainSourceVisualizerProps {
   sampleId: string;
@@ -74,7 +75,7 @@ export const GrainSourceVisualizer: React.FC<GrainSourceVisualizerProps> = ({
 
     const updateSize = () => {
       const rect = container.getBoundingClientRect();
-      const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
+      const dpr = capDpr(typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1);
       sizeRef.current = { w: rect.width, h: rect.height, dpr };
       const targetW = Math.max(120, Math.floor(rect.width));
       const targetH = Math.max(50, Math.floor(rect.height || height));
@@ -108,8 +109,16 @@ export const GrainSourceVisualizer: React.FC<GrainSourceVisualizerProps> = ({
 
     const peaks = getCachedSamplePeaks(sampleId, 200);
     const isVisuallyActive = isPlaying && !bypass;
+    // 低端设备 30fps 上限,降低常驻波形/粒子绘制开销
+    const frameGate = createBudgetFrameGate();
 
     const render = () => {
+      if (!frameGate(typeof performance !== 'undefined' ? performance.now() : Date.now())) {
+        if (isVisuallyActive) {
+          animId = requestAnimationFrame(render);
+        }
+        return;
+      }
       const { w: cachedW, h: cachedH, dpr } = sizeRef.current;
       const w = cachedW || (canvas.width > 0 ? canvas.width / dpr : 120);
       const h = cachedH || (canvas.height > 0 ? canvas.height / dpr : height);
@@ -371,7 +380,8 @@ export const GrainSourceVisualizer: React.FC<GrainSourceVisualizerProps> = ({
             ? `rgba(216, 180, 254, ${(alpha * 0.95).toFixed(3)})`
             : `rgba(110, 231, 183, ${(alpha * 0.95).toFixed(3)})`;
           ctx.shadowColor = g.isReverse ? '#a855f7' : '#10b981';
-          ctx.shadowBlur = Math.round(envGain * 12);
+          // Android WebView 上 shadowBlur 走昂贵的软件渲染,低端设备禁用
+          ctx.shadowBlur = getPerformanceBudget().allowShadowBlur ? Math.round(envGain * 12) : 0;
           ctx.fill();
           ctx.shadowBlur = 0;
         }

@@ -10,7 +10,7 @@
  * Strict industrial aesthetic: 100% zero emoji, 1px precision borders, high contrast.
  */
 
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { Activity, ChevronLeft, ChevronRight, GripVertical } from 'lucide-react';
 import { readAccent } from '../../theme/deckPalette';
 import {
@@ -64,6 +64,235 @@ export const SignalFlowGraph: React.FC<SignalFlowGraphProps> = ({
   // Drag-and-drop state for live reordering and cross-bus transfers
   const [draggedItem, setDraggedItem] = useState<{ id: string; sourceLane: 'laneA' | 'laneB' } | null>(null);
   const [dropTarget, setDropTarget] = useState<{ lane: 'laneA' | 'laneB'; targetIndex: number } | null>(null);
+
+  // Touch / Pointer-based long-press drag state (Android / iOS touchscreens
+  // do NOT fire HTML5 dragstart/dragover, so we replicate the whole pipeline
+  // with Pointer Events. A 320ms long-press arms the drag; further pointer
+  // movement tracks a floating ghost and locates the nearest drop slot.)
+  const touchDragRef = useRef<{
+    pointerId: number;
+    id: string;
+    sourceLane: 'laneA' | 'laneB';
+    startX: number;
+    startY: number;
+    armed: boolean;          // long-press timer fired
+    dragging: boolean;       // finger moved past slop while armed
+    ghostEl: HTMLElement | null;
+    sourceEl: HTMLElement | null;
+    lastTarget: { lane: 'laneA' | 'laneB'; targetIndex: number } | null;
+  } | null>(null);
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearLongPressTimer = () => {
+    if (longPressTimerRef.current !== null) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  };
+
+  // Helper: locate which effect card (if any) is at a given viewport point,
+  // excluding the floating ghost. Reads data attributes written at render time.
+  const hitTestEffectCard = (x: number, y: number): { id: string; lane: 'laneA' | 'laneB'; rect: DOMRect } | null => {
+    if (typeof document === 'undefined') return null;
+    const el = document.elementFromPoint(x, y) as HTMLElement | null;
+    if (!el) return null;
+    const card = el.closest('[data-effect-id]') as HTMLElement | null;
+    if (!card) return null;
+    const id = card.getAttribute('data-effect-id');
+    const laneAttr = card.getAttribute('data-effect-lane');
+    if (!id) return null;
+    const lane: 'laneA' | 'laneB' = laneAttr === 'laneB' ? 'laneB' : 'laneA';
+    return { id, lane, rect: card.getBoundingClientRect() };
+  };
+
+  const hitTestLaneContainer = (x: number, y: number): 'laneA' | 'laneB' | null => {
+    if (typeof document === 'undefined') return null;
+    const el = document.elementFromPoint(x, y) as HTMLElement | null;
+    if (!el) return null;
+    const zone = el.closest('[data-lane-drop]') as HTMLElement | null;
+    if (!zone) return null;
+    const laneAttr = zone.getAttribute('data-lane-drop');
+    return laneAttr === 'laneB' ? 'laneB' : laneAttr === 'laneA' ? 'laneA' : null;
+  };
+
+  const teardownTouchDrag = () => {
+    clearLongPressTimer();
+    const st = touchDragRef.current;
+    if (st?.ghostEl && st.ghostEl.parentNode) {
+      st.ghostEl.parentNode.removeChild(st.ghostEl);
+    }
+    touchDragRef.current = null;
+    setDraggedItem(null);
+    setDropTarget(null);
+  };
+
+  const handleEffectPointerDown = (e: React.PointerEvent<HTMLDivElement>, id: string, lane: 'laneA' | 'laneB') => {
+    // Only arm touch pen input here — mouse is handled by HTML5 DnD
+    if (e.pointerType !== 'touch' && e.pointerType !== 'pen') return;
+    // Prevent scroll-capture so the user can long-press without the page scrolling
+    e.stopPropagation();
+    // Capture the pointer so subsequent move/up events keep targeting this card
+    // even when the finger slides across sibling lanes.
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch { /* noop */ }
+
+    teardownTouchDrag();
+    touchDragRef.current = {
+      pointerId: e.pointerId,
+      id,
+      sourceLane: lane,
+      startX: e.clientX,
+      startY: e.clientY,
+      armed: false,
+      dragging: false,
+      ghostEl: null,
+      sourceEl: e.currentTarget,
+      lastTarget: null
+    };
+
+    longPressTimerRef.current = setTimeout(() => {
+      const st = touchDragRef.current;
+      if (!st || st.dragging) return;
+      st.armed = true;
+      setDraggedItem({ id: st.id, sourceLane: st.sourceLane });
+
+      // Spawn a floating ghost element that follows the finger
+      if (st.sourceEl && typeof document !== 'undefined') {
+        const rect = st.sourceEl.getBoundingClientRect();
+        const ghost = st.sourceEl.cloneNode(true) as HTMLElement;
+        ghost.style.position = 'fixed';
+        ghost.style.left = `${rect.left}px`;
+        ghost.style.top = `${rect.top}px`;
+        ghost.style.width = `${rect.width}px`;
+        ghost.style.height = `${rect.height}px`;
+        ghost.style.pointerEvents = 'none';
+        ghost.style.zIndex = '9999';
+        ghost.style.opacity = '0.85';
+        ghost.style.transform = 'scale(1.05)';
+        ghost.style.boxShadow = '0 8px 24px rgba(56,189,248,0.35)';
+        ghost.style.transition = 'none';
+        document.body.appendChild(ghost);
+        st.ghostEl = ghost;
+      }
+
+      try {
+        if (typeof navigator !== 'undefined' && (navigator as any).vibrate) {
+          (navigator as any).vibrate(15);
+        }
+      } catch { /* noop */ }
+    }, 320);
+  };
+
+  const handleEffectPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const st = touchDragRef.current;
+    if (!st || e.pointerId !== st.pointerId) return;
+
+    const dx = e.clientX - st.startX;
+    const dy = e.clientY - st.startY;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    if (!st.armed) {
+      // Cancel pending long-press if user moved before hold time
+      if (dist > 8) {
+        teardownTouchDrag();
+      }
+      return;
+    }
+
+    // Armed: any movement = dragging
+    if (dist > 4) st.dragging = true;
+    if (!st.dragging) return;
+
+    // Prevent scrolling while dragging
+    if (e.cancelable) e.preventDefault();
+
+    if (st.ghostEl) {
+      const w = st.ghostEl.offsetWidth;
+      const h = st.ghostEl.offsetHeight;
+      st.ghostEl.style.left = `${e.clientX - w / 2}px`;
+      st.ghostEl.style.top = `${e.clientY - h / 2}px`;
+    }
+
+    // Locate drop target: prefer hovering card midpoint insertion, fallback to lane container
+    const hit = hitTestEffectCard(e.clientX, e.clientY);
+    let target: { lane: 'laneA' | 'laneB'; targetIndex: number } | null = null;
+    if (hit) {
+      const order = hit.lane === 'laneA' ? laneAOrder : laneBOrder;
+      const idx = order.indexOf(hit.id);
+      if (idx !== -1) {
+        const midX = hit.rect.left + hit.rect.width / 2;
+        const insertIndex = e.clientX < midX ? idx : idx + 1;
+        target = { lane: hit.lane, targetIndex: insertIndex };
+      }
+    }
+    if (!target) {
+      const laneHit = hitTestLaneContainer(e.clientX, e.clientY);
+      if (laneHit) {
+        const order = laneHit === 'laneA' ? laneAOrder : laneBOrder;
+        target = { lane: laneHit, targetIndex: order.length };
+      }
+    }
+
+    if (
+      (target && (!st.lastTarget || st.lastTarget.lane !== target.lane || st.lastTarget.targetIndex !== target.targetIndex)) ||
+      (!target && st.lastTarget)
+    ) {
+      st.lastTarget = target;
+      setDropTarget(target);
+    }
+  };
+
+  const commitTouchDrop = (st: NonNullable<typeof touchDragRef.current>) => {
+    const target = st.lastTarget;
+    if (!target) return;
+    const effectId = st.id;
+    const sourceLane = st.sourceLane;
+    const targetLane = target.lane;
+    const targetIndex = target.targetIndex;
+
+    if (sourceLane === targetLane) {
+      const currentOrder = targetLane === 'laneA' ? [...laneAOrder] : [...laneBOrder];
+      const oldIndex = currentOrder.indexOf(effectId);
+      if (oldIndex !== -1) {
+        currentOrder.splice(oldIndex, 1);
+        const insertAt = targetIndex > oldIndex ? targetIndex - 1 : targetIndex;
+        const clamped = Math.max(0, Math.min(insertAt, currentOrder.length));
+        currentOrder.splice(clamped, 0, effectId);
+        if (onLaneReorder) {
+          onLaneReorder(targetLane, currentOrder);
+        } else if (targetLane === 'laneA' && onReorderEffects) {
+          onReorderEffects(currentOrder);
+        }
+      }
+    } else {
+      if (onMoveEffectBetweenLanes) {
+        onMoveEffectBetweenLanes(effectId, sourceLane, targetLane);
+      }
+      if (onLaneReorder) {
+        const targetList = (targetLane === 'laneA' ? [...laneAOrder] : [...laneBOrder]).filter(x => x !== effectId);
+        const clamped = Math.max(0, Math.min(targetIndex, targetList.length));
+        targetList.splice(clamped, 0, effectId);
+        onLaneReorder(targetLane, targetList);
+      }
+    }
+  };
+
+  const handleEffectPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    const st = touchDragRef.current;
+    if (!st || e.pointerId !== st.pointerId) return;
+    const wasDragging = st.dragging;
+    if (wasDragging) {
+      commitTouchDrop(st);
+    }
+    teardownTouchDrag();
+  };
+
+  const handleEffectPointerCancel = (e: React.PointerEvent<HTMLDivElement>) => {
+    const st = touchDragRef.current;
+    if (!st || e.pointerId !== st.pointerId) return;
+    teardownTouchDrag();
+  };
 
   const sourcesList = (propsActiveSources && propsActiveSources.length > 0)
     ? propsActiveSources
@@ -441,11 +670,17 @@ export const SignalFlowGraph: React.FC<SignalFlowGraphProps> = ({
       <div
         key={`${lane ?? 'single'}-${id}`}
         draggable={true}
+        data-effect-id={id}
+        data-effect-lane={lane ?? 'laneA'}
         onDragStart={(e) => handleDragStart(e, id, lane || 'laneA')}
         onDragEnd={handleDragEnd}
         onDragOver={(e) => handleCardDragOver(e, lane || 'laneA', index)}
         onDrop={(e) => handleCommitDrop(e, lane || 'laneA', index)}
-        className={`group relative flex flex-col justify-between p-1.5 rounded-lg border text-[9px] font-mono h-14 min-w-[76px] sm:min-w-[84px] flex-1 max-w-[130px] transition-all cursor-grab active:cursor-grabbing select-none ${getNodeClass(active, isDraggingThis)}`}
+        onPointerDown={(e) => handleEffectPointerDown(e, id, lane || 'laneA')}
+        onPointerMove={handleEffectPointerMove}
+        onPointerUp={handleEffectPointerUp}
+        onPointerCancel={handleEffectPointerCancel}
+        className={`group relative flex flex-col justify-between p-1.5 rounded-lg border text-[9px] font-mono h-14 min-w-[76px] sm:min-w-[84px] flex-1 max-w-[130px] transition-all cursor-grab active:cursor-grabbing select-none touch-none ${getNodeClass(active, isDraggingThis)}`}
       >
         {/* Top Header Bar */}
         <div className="flex items-center justify-between pointer-events-none">
@@ -691,6 +926,7 @@ export const SignalFlowGraph: React.FC<SignalFlowGraphProps> = ({
             {/* LANE A: Core Tone & Shaper Strip                         */}
             {/* ======================================================== */}
             <div
+              data-lane-drop="laneA"
               onDragOver={(e) => handleLaneContainerDragOver(e, 'laneA', laneAOrder.length)}
               onDrop={(e) => handleCommitDrop(e, 'laneA', laneAOrder.length)}
               className={`flex items-stretch gap-1.5 p-1.5 rounded-lg border min-h-[66px] transition-colors min-w-0 ${
@@ -752,6 +988,7 @@ export const SignalFlowGraph: React.FC<SignalFlowGraphProps> = ({
             {/* LANE B: Space & Ambient Strip + Master Sum Output        */}
             {/* ======================================================== */}
             <div
+              data-lane-drop="laneB"
               onDragOver={(e) => handleLaneContainerDragOver(e, 'laneB', laneBOrder.length)}
               onDrop={(e) => handleCommitDrop(e, 'laneB', laneBOrder.length)}
               className={`flex items-stretch gap-1.5 p-1.5 rounded-lg border min-h-[66px] transition-colors min-w-0 ${

@@ -1084,6 +1084,61 @@ export function clearAmbientSoundscapeCache(): void {
 }
 
 /**
+ * Trims encoder priming/padding silence from decoded MP3/AAC buffers in-place.
+ *
+ * Lossy codecs (LAME MP3, AAC) insert ~1152-sample near-silent priming frames at the head
+ * and zero-padded frames at the tail. When `AudioBufferSourceNode.loop = true` wraps the
+ * buffer, the splice point crosses these silent regions, producing an audible click on every
+ * loop iteration. This scans for the first/last sample whose amplitude exceeds a conservative
+ * threshold and zero-pads everything outside, so the loop boundary lands on real content.
+ *
+ * Safe: only modifies samples that are already below perceptual threshold (-60 dBFS).
+ */
+export function trimCodecPaddingFromBuffer(buffer: AudioBuffer): void {
+  const numChannels = buffer.numberOfChannels;
+  if (numChannels === 0) return;
+  const channels: Float32Array[] = [];
+  for (let c = 0; c < numChannels; c++) {
+    channels.push(buffer.getChannelData(c));
+  }
+  const len = channels[0]?.length ?? 0;
+  if (len < 8192) return;
+
+  // -60 dBFS = 0.001 amplitude; anything below is inaudible codec noise floor
+  const threshold = 0.001;
+
+  let firstAudible = 0;
+  outerHead: for (let i = 0; i < len; i++) {
+    for (let c = 0; c < numChannels; c++) {
+      if (Math.abs(channels[c][i]) > threshold) {
+        firstAudible = i;
+        break outerHead;
+      }
+    }
+  }
+
+  let lastAudible = len - 1;
+  outerTail: for (let i = len - 1; i >= 0; i--) {
+    for (let c = 0; c < numChannels; c++) {
+      if (Math.abs(channels[c][i]) > threshold) {
+        lastAudible = i;
+        break outerTail;
+      }
+    }
+  }
+
+  // Nothing to trim if the whole buffer is already loud end-to-end
+  if (firstAudible === 0 && lastAudible === len - 1) return;
+
+  // Zero-pad head and tail in place (keeps buffer length, only silences edges)
+  for (let c = 0; c < numChannels; c++) {
+    const data = channels[c];
+    for (let i = 0; i < firstAudible; i++) data[i] = 0;
+    for (let i = lastAudible + 1; i < len; i++) data[i] = 0;
+  }
+}
+
+/**
  * Equalizes the perceptual loudness across any synthesized or decoded AudioBuffer.
  * Calibrates true RMS to target -16..-20 dBFS level and applies soft-knee tanh limiting
  * to prevent digital clipping while ensuring all soundscapes match in apparent loudness.
@@ -1167,6 +1222,7 @@ export async function loadRealAmbientAudioBuffer(
       if (!resp.ok) return null;
       const arrayBuffer = await resp.arrayBuffer();
       const decoded = await ctx.decodeAudioData(arrayBuffer);
+      trimCodecPaddingFromBuffer(decoded);
       equalizeBufferLoudness(decoded);
       realAudioBufferCache.set(cacheKey, decoded);
       return decoded;

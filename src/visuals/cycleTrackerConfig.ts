@@ -12,14 +12,26 @@ import { isRecord, readStoredJson, writeStoredJson } from '../audio/storage/safe
 export const CYCLE_CAPACITY_MIN = 4;
 export const CYCLE_CAPACITY_MAX = 48;
 
+export type CycleBeadPosition = 'left' | 'top';
+
 export interface CycleTrackerSettings {
   visible: boolean;
   capacity: number; // CYCLE_CAPACITY_MIN .. CYCLE_CAPACITY_MAX (default 12)
+  position: CycleBeadPosition; // vertical mala on left edge, or horizontal strand across the top
+}
+
+/** Touch devices (Android) default to the top strand; desktop keeps the left edge. */
+export function defaultCycleBeadPosition(): CycleBeadPosition {
+  if (typeof window !== 'undefined' && 'ontouchstart' in window) {
+    return 'top';
+  }
+  return 'left';
 }
 
 export const DEFAULT_CYCLE_TRACKER_SETTINGS: CycleTrackerSettings = {
   visible: true,
-  capacity: 12
+  capacity: 12,
+  position: 'left'
 };
 
 const STORAGE_KEY = 'synhale_cycle_tracker_v1';
@@ -34,9 +46,11 @@ export function clampCycleCapacity(val: unknown): number {
 
 function repairCycleTrackerSettings(raw: unknown): CycleTrackerSettings {
   const parsed = isRecord(raw) ? raw : {};
+  const fallbackPosition = defaultCycleBeadPosition();
   return {
     visible: typeof parsed.visible === 'boolean' ? parsed.visible : DEFAULT_CYCLE_TRACKER_SETTINGS.visible,
-    capacity: clampCycleCapacity(parsed.capacity)
+    capacity: clampCycleCapacity(parsed.capacity),
+    position: parsed.position === 'left' || parsed.position === 'top' ? parsed.position : fallbackPosition
   };
 }
 

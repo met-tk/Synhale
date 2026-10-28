@@ -34,6 +34,11 @@ import {
   DEFAULT_CYCLE_TRACKER_SETTINGS,
   type CycleTrackerSettings
 } from '../../../visuals/cycleTrackerConfig';
+import {
+  DECK_SCALE_MAX,
+  DECK_SCALE_MIN,
+  DEFAULT_DECK_SCALE
+} from '../../theme/deckScaleConfig';
 import { getPalettesByMode, type ThemeId } from '../../theme/tokens';
 
 export interface SettingsModalProps {
@@ -51,6 +56,8 @@ export interface SettingsModalProps {
   onIndicatorPrecisionChange?: (precision: IndicatorPrecision) => void;
   cycleTrackerSettings?: CycleTrackerSettings;
   onCycleTrackerSettingsChange?: (settings: CycleTrackerSettings) => void;
+  deckScale?: number;
+  onDeckScaleChange?: (scale: number) => void;
   audioContext?: BaseAudioContext | null;
 }
 
@@ -100,6 +107,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onIndicatorPrecisionChange,
   cycleTrackerSettings = DEFAULT_CYCLE_TRACKER_SETTINGS,
   onCycleTrackerSettingsChange,
+  deckScale = DEFAULT_DECK_SCALE,
+  onDeckScaleChange,
   audioContext
 }) => {
   const dialogRef = useModalDialog(isOpen, onClose);
@@ -126,6 +135,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const handleResetDefaults = () => {
     onCueSettingsChange(DEFAULT_CUE_SETTINGS);
     onCycleTrackerSettingsChange?.(DEFAULT_CYCLE_TRACKER_SETTINGS);
+    onDeckScaleChange?.(DEFAULT_DECK_SCALE);
   };
 
   return (
@@ -437,6 +447,98 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
           </div>
 
+          {/* Section 2b: Hardware Deck Content Scale (60..130, scoped strictly to the deck console) */}
+          <div className={`p-4 rounded-xl border flex flex-col gap-3.5 ${
+            isDark
+              ? 'border-neutral-800/80 bg-neutral-900/40'
+              : 'border-neutral-200 bg-neutral-50/80'
+          }`}>
+            <div className="flex items-center justify-between">
+              <div className="flex items-start gap-2.5">
+                <div className={`p-1 rounded border mt-0.5 ${
+                  isDark
+                    ? 'bg-neutral-800 text-zinc-200 border-neutral-700'
+                    : 'bg-neutral-100 text-neutral-800 border-neutral-300'
+                }`}>
+                  <Sliders size={14} strokeWidth={1.8} />
+                </div>
+                <div>
+                  <span className={`text-xs font-semibold uppercase tracking-wider ${
+                    isDark ? 'text-slate-200' : 'text-neutral-800'
+                  }`}>
+                    调制台缩放 · Deck Zoom
+                  </span>
+                  <p className={`text-[10px] mt-0.5 leading-relaxed ${
+                    isDark ? 'text-slate-400' : 'text-neutral-500'
+                  }`}>
+                    仅缩放硬件机架旋钮与推子密度，不影响全局
+                  </p>
+                </div>
+              </div>
+
+              {/* Current Value Pill */}
+              <div className={`shrink-0 px-2.5 py-1 rounded text-xs font-mono font-semibold border ${
+                isDark
+                  ? 'bg-neutral-950 border-neutral-800 text-zinc-100'
+                  : 'bg-white border-neutral-300 text-neutral-900 shadow-xs'
+              }`}>
+                {deckScale}%
+              </div>
+            </div>
+
+            {/* Slider Control */}
+            <div className="space-y-2 pt-1">
+              <div className="flex items-center gap-3">
+                <span className={`text-[10px] font-mono ${isDark ? 'text-slate-500' : 'text-neutral-400'}`}>{DECK_SCALE_MIN}%</span>
+                <input
+                  type="range"
+                  min={DECK_SCALE_MIN}
+                  max={DECK_SCALE_MAX}
+                  step={5}
+                  value={deckScale}
+                  onChange={(e) => onDeckScaleChange?.(Number(e.target.value))}
+                  aria-label="调制台缩放滑块"
+                  className={`flex-1 h-1.5 rounded-lg appearance-none cursor-pointer ${
+                    isDark
+                      ? 'bg-neutral-800 accent-zinc-200'
+                      : 'bg-neutral-200 accent-neutral-800'
+                  }`}
+                />
+                <span className={`text-[10px] font-mono ${isDark ? 'text-slate-500' : 'text-neutral-400'}`}>{DECK_SCALE_MAX}%</span>
+              </div>
+
+              {/* Quick Preset Buttons */}
+              <div className="grid grid-cols-4 gap-1.5 pt-1">
+                {[
+                  { label: '70% 紧凑', val: 70 },
+                  { label: '85% 收窄', val: 85 },
+                  { label: '100% 标准', val: 100 },
+                  { label: '120% 放大', val: 120 }
+                ].map((item) => {
+                  const isSelected = deckScale === item.val;
+                  return (
+                    <button
+                      key={item.val}
+                      type="button"
+                      onClick={() => onDeckScaleChange?.(item.val)}
+                      className={`px-2.5 py-1 rounded text-[10px] font-mono border transition-all ${
+                        isSelected
+                          ? isDark
+                            ? 'bg-zinc-800 text-zinc-100 border-zinc-600 shadow-xs font-semibold'
+                            : 'bg-neutral-200 text-neutral-950 border-neutral-400 shadow-xs font-semibold'
+                          : isDark
+                            ? 'bg-neutral-950/60 text-slate-400 border-neutral-800 hover:text-slate-200'
+                            : 'bg-white text-neutral-600 border-neutral-200 hover:bg-neutral-100'
+                      }`}
+                    >
+                      {item.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
           {/* Section 3: Breath Transition Cue Sound */}
           <div className={`p-4 rounded-xl border flex flex-col gap-4 ${
             isDark
@@ -721,6 +823,42 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
             {cycleTrackerSettings.visible && (
               <div className="space-y-2 pt-1">
+                {/* Position Toggle: left edge vs top strand */}
+                <div className="flex items-center justify-between">
+                  <label className={`text-[10px] font-mono uppercase font-semibold tracking-wider ${
+                    isDark ? 'text-slate-400' : 'text-neutral-500'
+                  }`}>
+                    念珠位置
+                  </label>
+                  <div className="flex items-center gap-1.5">
+                    {([
+                      { label: '左缘竖排', val: 'left' },
+                      { label: '顶部横排', val: 'top' }
+                    ] as const).map((item) => {
+                      const isSelected = cycleTrackerSettings.position === item.val;
+                      return (
+                        <button
+                          key={item.val}
+                          type="button"
+                          aria-pressed={isSelected}
+                          onClick={() => onCycleTrackerSettingsChange?.({ ...cycleTrackerSettings, position: item.val })}
+                          className={`px-2.5 py-1 rounded text-[10px] font-mono border transition-all ${
+                            isSelected
+                              ? isDark
+                                ? 'bg-sky-500/15 text-sky-300 border-sky-500/50 shadow-xs font-semibold'
+                                : 'bg-sky-50 text-sky-800 border-sky-300 shadow-xs font-semibold'
+                              : isDark
+                                ? 'bg-neutral-950/60 text-slate-400 border-neutral-800 hover:text-slate-200'
+                                : 'bg-white text-neutral-600 border-neutral-200 hover:bg-neutral-100'
+                          }`}
+                        >
+                          {item.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
                 <div className="flex items-center justify-between">
                   <label className={`text-[10px] font-mono uppercase font-semibold tracking-wider ${
                     isDark ? 'text-slate-400' : 'text-neutral-500'
@@ -834,7 +972,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <span className={`text-xs font-mono font-medium mt-1 inline-block ${
                   isDark ? 'text-sky-300' : 'text-sky-700'
                 }`}>
-                  1.0.0
+                  1.0.4
                 </span>
               </div>
 

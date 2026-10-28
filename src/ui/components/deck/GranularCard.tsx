@@ -38,6 +38,8 @@ export interface GranularCardProps {
   isDark: boolean;
   draggingItem?: any;
   onSourceDragStart: (sourceId: string, sourceType: SoundSourceType, sourceName: string) => (e: React.DragEvent) => void;
+  /** 触屏「点击托举」处理器（tap-to-carry 替代 HTML5 拖拽） */
+  onSourceTapLift?: (sourceId: string, sourceType: SoundSourceType, sourceName: string) => (e: React.MouseEvent) => void;
   onDragEnd: () => void;
   isPlaying: boolean;
   getVisualGrains?: () => ParticleVisualGrain[];
@@ -58,6 +60,7 @@ export const GranularCard: React.FC<GranularCardProps> = ({
   isDark,
   draggingItem,
   onSourceDragStart,
+  onSourceTapLift,
   onDragEnd,
   isPlaying,
   getVisualGrains,
@@ -127,6 +130,7 @@ export const GranularCard: React.FC<GranularCardProps> = ({
         draggable={true}
         onDragStart={onSourceDragStart(sourceId, 'granular', `${typeName}${instanceSuffix}`)}
         onDragEnd={onDragEnd}
+        onClick={onSourceTapLift?.(sourceId, 'granular', `${typeName}${instanceSuffix}`)}
         title="拖至上方复制或删除"
         className={`flex items-center justify-between mb-3 border-b pb-1.5 cursor-grab active:cursor-grabbing select-none hover:bg-white/[0.02] rounded-t transition-colors ${cardHeaderBorderClass}`}
       >

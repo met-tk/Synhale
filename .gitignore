@@ -9,3 +9,17 @@ scratch/
 release/
 .DS_Store
 Thumbs.db
+
+# Build artifacts & logs
+*.apk
+*.log
+
+# Local build environments and tool caches
+.tools/
+tools/android-sdk/
+tools/android-sdk-dl/
+tools/gradle-home/
+tools/mobile-verify/
+tools/ms-playwright/
+tools/py-venv/
+

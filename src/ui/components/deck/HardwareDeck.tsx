@@ -50,6 +50,7 @@ import {
   generateMultiFramePreviewSvgPath
 } from '../../../audio/dsp/wavetableData';
 import { useTheme } from '../../theme';
+import { IS_TOUCH_DEVICE } from '../../hooks/touchDevice';
 import { Knob, ModulationCard } from '../knob';
 import { BipolarFader } from '../fader';
 import { BreathMacroTimelineScope } from '../vu/BreathMacroTimelineScope';
@@ -71,6 +72,7 @@ import { GranularCard } from './GranularCard';
 import { OscBCard } from './OscBCard';
 import { DroneCard } from './DroneCard';
 import { AmbientCard } from './AmbientCard';
+import { createBudgetFrameGate } from '../../../performance/budget';
 
 export const CHORD_TYPE_OPTIONS: { type: ChordType; label: string; desc: string }[] = [
   { type: 'octave', label: 'OCT', desc: 'Octaves (0, 12, 24)' },
@@ -509,10 +511,14 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
     if (!isPlaying) return;
     let frameId: number;
     let last = performance.now();
+    // 低端设备帧率上限,时间轴基于 dt 累加,跳帧不丢时间
+    const frameGate = createBudgetFrameGate();
     const tick = (now: number) => {
       const dt = (now - last) / 1000;
       last = now;
-      setInternalTime(prev => prev + dt);
+      if (frameGate(now)) {
+        setInternalTime(prev => prev + dt);
+      }
       frameId = requestAnimationFrame(tick);
     };
     frameId = requestAnimationFrame(tick);
@@ -875,20 +881,20 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
     }
   };
 
-  const handleDropOnCard = (_targetEffectId: string, targetLane: 'laneA' | 'laneB', fallbackIndex: number) => (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const targetIndex = (dragInsertion && dragInsertion.lane === targetLane) ? dragInsertion.index : fallbackIndex;
-
-    const data = parseEffectDragPayload(e);
-
-    const activeItem = data || draggingItem || internalDraggingItem;
-
+  const clearDragState = () => {
     setDragOverEffectId(null);
     setDragInsertion(null);
     setInternalDraggingItem(null);
     onDragModuleChange?.(null);
+  };
 
+  // ---- 放置核心（纯逻辑）：HTML5 drop 与触屏 tap-place 共用 ----
+
+  const resolveDropOnCard = (
+    activeItem: EffectDragPayload | InternalDraggingItem,
+    targetLane: 'laneA' | 'laneB',
+    targetIndex: number
+  ) => {
     if (!activeItem) return;
     if (activeItem.kind !== 'effect') return;
     const sourceEffectId = activeItem.effectId;
@@ -928,18 +934,10 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
     }
   };
 
-  const handleDropOnLane = (targetLane: 'laneA' | 'laneB') => (e: React.DragEvent) => {
-    e.preventDefault();
-
-    const data = parseEffectDragPayload(e);
-
-    const activeItem = data || draggingItem || internalDraggingItem;
-
-    setDragOverEffectId(null);
-    setDragInsertion(null);
-    setInternalDraggingItem(null);
-    onDragModuleChange?.(null);
-
+  const resolveDropOnLane = (
+    activeItem: EffectDragPayload | InternalDraggingItem,
+    targetLane: 'laneA' | 'laneB'
+  ) => {
     if (!activeItem) return;
     if (activeItem.kind !== 'effect') return;
     const sourceEffectId = activeItem.effectId;
@@ -968,6 +966,82 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
         onMoveEffectBetweenLanes?.(sourceEffectId, sourceLane, targetLane);
       }
     }
+  };
+
+  const handleDropOnCard = (_targetEffectId: string, targetLane: 'laneA' | 'laneB', fallbackIndex: number) => (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const targetIndex = (dragInsertion && dragInsertion.lane === targetLane) ? dragInsertion.index : fallbackIndex;
+
+    const activeItem = parseEffectDragPayload(e) || draggingItem || internalDraggingItem;
+
+    clearDragState();
+    resolveDropOnCard(activeItem, targetLane, targetIndex);
+  };
+
+  const handleDropOnLane = (targetLane: 'laneA' | 'laneB') => (e: React.DragEvent) => {
+    e.preventDefault();
+
+    const activeItem = parseEffectDragPayload(e) || draggingItem || internalDraggingItem;
+
+    clearDragState();
+    resolveDropOnLane(activeItem, targetLane);
+  };
+
+  // ---- 触屏「点击托举 → 点击放置」交互 ----
+  // 触屏设备上 HTML5 Drag & Drop 不会触发（浏览器仅对鼠标派发 drag 事件），
+  // 因此以「点击卡片 header 托举 → 点击目标卡 / BUS 容器放置」替代拖拽。
+  // 桌面端（IS_TOUCH_DEVICE=false）以下 tap 处理器全部短路，原生拖放行为不变。
+  // 注意：window 级 dragend/drop 清理监听对 tap 交互不会触发，
+  // tap 状态依赖「再次点击同一模块取消」与「放置后清理」两个显式路径。
+
+  /** 点击效果卡 header 托举该模块；再次点击同一模块则取消托举 */
+  const handleTapLiftEffect = (effectId: string, lane: 'laneA' | 'laneB', effectName: string) => (e: React.MouseEvent) => {
+    if (!IS_TOUCH_DEVICE) return;
+    // 点击 header 内的按钮/控件时忽略，避免误触发托举
+    if ((e.target as HTMLElement).closest('button, input, select, textarea, [role="slider"]')) return;
+    e.stopPropagation();
+    if (draggingItem?.kind === 'effect' && draggingItem.effectId === effectId) {
+      clearDragState();
+      return;
+    }
+    const payload = { kind: 'effect' as const, effectId, lane, effectName };
+    setInternalDraggingItem(payload);
+    onDragModuleChange?.(payload);
+  };
+
+  /** 点击源卡 header 托举该发生器；再次点击同一模块则取消托举 */
+  const handleTapLiftSource = (sourceId: string, sourceType: SoundSourceType, sourceName: string) => (e: React.MouseEvent) => {
+    if (!IS_TOUCH_DEVICE) return;
+    if ((e.target as HTMLElement).closest('button, input, select, textarea, [role="slider"]')) return;
+    e.stopPropagation();
+    if (draggingItem?.kind === 'source' && draggingItem.sourceId === sourceId) {
+      clearDragState();
+      return;
+    }
+    const payload = { kind: 'source' as const, sourceId, sourceType, sourceName };
+    setInternalDraggingItem(payload);
+    onDragModuleChange?.(payload);
+  };
+
+  /** 点击效果卡（放置到该卡槽位索引处） */
+  const handleTapPlaceOnCard = (targetLane: 'laneA' | 'laneB', fallbackIndex: number) => (e: React.MouseEvent) => {
+    if (!IS_TOUCH_DEVICE || !draggingItem) return;
+    if ((e.target as HTMLElement).closest('button, input, select, textarea, [role="slider"]')) return;
+    e.stopPropagation();
+    const activeItem = draggingItem;
+    clearDragState();
+    resolveDropOnCard(activeItem, targetLane, fallbackIndex);
+  };
+
+  /** 点击 BUS 容器空白处（放置/追加到该 BUS 末尾） */
+  const handleTapPlaceOnLane = (targetLane: 'laneA' | 'laneB') => (e: React.MouseEvent) => {
+    if (!IS_TOUCH_DEVICE || !draggingItem) return;
+    if ((e.target as HTMLElement).closest('button, input, select, textarea, [role="slider"]')) return;
+    e.stopPropagation();
+    const activeItem = draggingItem;
+    clearDragState();
+    resolveDropOnLane(activeItem, targetLane);
   };
 
   const renderRackSlotControls = (
@@ -1181,6 +1255,7 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
           onDragOver={handleDragOverCard(effectId, lane, slotIndex)}
           onDragLeave={handleDragLeaveCard(effectId)}
           onDrop={handleDropOnCard(effectId, lane, slotIndex)}
+          onClick={handleTapPlaceOnCard(lane, slotIndex)}
           className={`relative rounded-lg border p-3 transition-all duration-150 ${cardContainerClass} ${
             gainParams?.bypass ? 'opacity-40' : 'opacity-100'
           } ${dragOverEffectId === effectId ? 'ring-2 ring-sky-400/80 border-sky-400 shadow-[0_0_15px_rgba(56,189,248,0.25)]' : ''} ${
@@ -1191,6 +1266,7 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
             draggable={true}
             onDragStart={handleDragStart(effectId, lane, 'Preamp Gain')}
             onDragEnd={handleDragEnd}
+            onClick={handleTapLiftEffect(effectId, lane, 'Preamp Gain')}
             title="拖拽重排或跨总线"
             className={`flex items-center justify-between mb-2 border-b pb-1.5 cursor-grab active:cursor-grabbing select-none hover:bg-white/[0.02] rounded-t transition-colors ${cardHeaderBorderClass}`}
           >
@@ -1291,6 +1367,7 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
           onDragOver={handleDragOverCard(effectId, lane, slotIndex)}
           onDragLeave={handleDragLeaveCard(effectId)}
           onDrop={handleDropOnCard(effectId, lane, slotIndex)}
+          onClick={handleTapPlaceOnCard(lane, slotIndex)}
           className={`relative rounded-lg border p-3 transition-all duration-150 ${cardContainerClass} ${
             driveParams.bypass ? 'opacity-40' : 'opacity-100'
           } ${dragOverEffectId === effectId ? 'ring-2 ring-sky-400/80 border-sky-400 shadow-[0_0_15px_rgba(56,189,248,0.25)]' : ''} ${
@@ -1301,6 +1378,7 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
             draggable={true}
             onDragStart={handleDragStart(effectId, lane, 'Tape Warmth Drive')}
             onDragEnd={handleDragEnd}
+            onClick={handleTapLiftEffect(effectId, lane, 'Tape Warmth Drive')}
             title="拖拽重排或跨总线"
             className={`flex items-center justify-between mb-2 border-b pb-1.5 cursor-grab active:cursor-grabbing select-none hover:bg-white/[0.02] rounded-t transition-colors ${cardHeaderBorderClass}`}
           >
@@ -1398,6 +1476,7 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
           onDragOver={handleDragOverCard(effectId, lane, slotIndex)}
           onDragLeave={handleDragLeaveCard(effectId)}
           onDrop={handleDropOnCard(effectId, lane, slotIndex)}
+          onClick={handleTapPlaceOnCard(lane, slotIndex)}
           className={`relative rounded-lg border p-3 transition-all duration-150 ${cardContainerClass} ${
             filterParams.bypass ? 'opacity-40' : 'opacity-100'
           } ${dragOverEffectId === effectId ? 'ring-2 ring-sky-400/80 border-sky-400 shadow-[0_0_15px_rgba(56,189,248,0.25)]' : ''} ${
@@ -1408,6 +1487,7 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
             draggable={true}
             onDragStart={handleDragStart(effectId, lane, 'Multimode Filter')}
             onDragEnd={handleDragEnd}
+            onClick={handleTapLiftEffect(effectId, lane, 'Multimode Filter')}
             title="拖拽重排或跨总线"
             className={`flex items-center justify-between mb-2 border-b pb-1.5 cursor-grab active:cursor-grabbing select-none hover:bg-white/[0.02] rounded-t transition-colors ${cardHeaderBorderClass}`}
           >
@@ -1557,6 +1637,7 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
             onDragOver={handleDragOverCard(effectId, lane, slotIndex)}
             onDragLeave={handleDragLeaveCard(effectId)}
             onDrop={handleDropOnCard(effectId, lane, slotIndex)}
+            onClick={handleTapPlaceOnCard(lane, slotIndex)}
             className={`relative rounded-lg border p-3 transition-all duration-150 ${cardContainerClass} ${
               eqParams.bypass ? 'opacity-40' : 'opacity-100'
             } ${dragOverEffectId === effectId ? 'ring-2 ring-sky-400/80 border-sky-400 shadow-[0_0_15px_rgba(56,189,248,0.25)]' : ''} ${
@@ -1567,6 +1648,7 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
               draggable={true}
               onDragStart={handleDragStart(effectId, lane, 'Parametric EQ')}
               onDragEnd={handleDragEnd}
+              onClick={handleTapLiftEffect(effectId, lane, 'Parametric EQ')}
               title="拖拽重排或跨总线"
               className={`flex items-center justify-between mb-2 border-b pb-1.5 cursor-grab active:cursor-grabbing select-none hover:bg-white/[0.02] rounded-t transition-colors ${cardHeaderBorderClass}`}
             >
@@ -1884,6 +1966,7 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
             onDragOver={handleDragOverCard(effectId, lane, slotIndex)}
             onDragLeave={handleDragLeaveCard(effectId)}
             onDrop={handleDropOnCard(effectId, lane, slotIndex)}
+            onClick={handleTapPlaceOnCard(lane, slotIndex)}
             className={`relative rounded-lg border p-3 transition-all duration-150 ${cardContainerClass} ${
               delayParams.bypass ? 'opacity-40' : 'opacity-100'
             } ${dragOverEffectId === effectId ? 'ring-2 ring-sky-400/80 border-sky-400 shadow-[0_0_15px_rgba(56,189,248,0.25)]' : ''} ${
@@ -1894,6 +1977,7 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
               draggable={true}
               onDragStart={handleDragStart(effectId, lane, 'Ping-Pong Delay')}
               onDragEnd={handleDragEnd}
+              onClick={handleTapLiftEffect(effectId, lane, 'Ping-Pong Delay')}
               title="拖拽重排或跨总线"
               className={`flex items-center justify-between mb-2 border-b pb-1.5 cursor-grab active:cursor-grabbing select-none hover:bg-white/[0.02] rounded-t transition-colors ${cardHeaderBorderClass}`}
             >
@@ -2000,6 +2084,7 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
             onDragOver={handleDragOverCard(effectId, lane, slotIndex)}
             onDragLeave={handleDragLeaveCard(effectId)}
             onDrop={handleDropOnCard(effectId, lane, slotIndex)}
+            onClick={handleTapPlaceOnCard(lane, slotIndex)}
             className={`relative rounded-lg border p-3 transition-all duration-150 ${cardContainerClass} ${
               reverbParams.bypass ? 'opacity-40' : 'opacity-100'
             } ${dragOverEffectId === effectId ? 'ring-2 ring-sky-400/80 border-sky-400 shadow-[0_0_15px_rgba(56,189,248,0.25)]' : ''} ${
@@ -2010,6 +2095,7 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
               draggable={true}
               onDragStart={handleDragStart(effectId, lane, 'Synthetic Reverb')}
               onDragEnd={handleDragEnd}
+              onClick={handleTapLiftEffect(effectId, lane, 'Synthetic Reverb')}
               title="拖拽重排或跨总线"
               className={`flex items-center justify-between mb-2 border-b pb-1.5 cursor-grab active:cursor-grabbing select-none hover:bg-white/[0.02] rounded-t transition-colors ${cardHeaderBorderClass}`}
             >
@@ -2117,6 +2203,7 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
             onDragOver={handleDragOverCard(effectId, lane, slotIndex)}
             onDragLeave={handleDragLeaveCard(effectId)}
             onDrop={handleDropOnCard(effectId, lane, slotIndex)}
+            onClick={handleTapPlaceOnCard(lane, slotIndex)}
             className={`relative rounded-lg border p-3 transition-all duration-150 ${cardContainerClass} ${
               adsrParams.bypass ? 'opacity-40' : 'opacity-100'
             } ${dragOverEffectId === effectId ? 'ring-2 ring-sky-400/80 border-sky-400 shadow-[0_0_15px_rgba(56,189,248,0.25)]' : ''} ${
@@ -2127,6 +2214,7 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
               draggable={true}
               onDragStart={handleDragStart(effectId, lane, 'ADSR Envelope')}
               onDragEnd={handleDragEnd}
+              onClick={handleTapLiftEffect(effectId, lane, 'ADSR Envelope')}
               title="拖拽重排或跨总线"
               className={`flex items-center justify-between mb-2 border-b pb-1.5 cursor-grab active:cursor-grabbing select-none hover:bg-white/[0.02] rounded-t transition-colors ${cardHeaderBorderClass}`}
             >
@@ -2253,6 +2341,7 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
             onDragOver={handleDragOverCard(effectId, lane, slotIndex)}
             onDragLeave={handleDragLeaveCard(effectId)}
             onDrop={handleDropOnCard(effectId, lane, slotIndex)}
+            onClick={handleTapPlaceOnCard(lane, slotIndex)}
             className={`relative rounded-lg border p-3 transition-all duration-150 ${cardContainerClass} ${
               lfoBypass ? 'opacity-40' : 'opacity-100'
             } ${dragOverEffectId === effectId ? 'ring-2 ring-sky-400/80 border-sky-400 shadow-[0_0_15px_rgba(56,189,248,0.25)]' : ''} ${
@@ -2263,6 +2352,7 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
               draggable={true}
               onDragStart={handleDragStart(effectId, lane, 'Dual LFO')}
               onDragEnd={handleDragEnd}
+              onClick={handleTapLiftEffect(effectId, lane, 'Dual LFO')}
               title="拖拽重排或跨总线"
               className={`flex items-center justify-between mb-2 border-b pb-1.5 cursor-grab active:cursor-grabbing select-none hover:bg-white/[0.02] rounded-t transition-colors ${cardHeaderBorderClass}`}
             >
@@ -2601,6 +2691,7 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
                     isDark={isDark}
                     draggingItem={draggingItem}
                     onSourceDragStart={handleSourceDragStart}
+                    onSourceTapLift={handleTapLiftSource}
                     onDragEnd={handleDragEnd}
                     onOpenWavetableDrawer={srcId => setActiveWavetableDrawerSource(srcId)}
                   />
@@ -2621,6 +2712,7 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
                     isDark={isDark}
                     draggingItem={draggingItem}
                     onSourceDragStart={handleSourceDragStart}
+                    onSourceTapLift={handleTapLiftSource}
                     onDragEnd={handleDragEnd}
                     isPlaying={isPlaying}
                     getVisualGrains={getVisualGrains}
@@ -2644,6 +2736,7 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
                     isDark={isDark}
                     draggingItem={draggingItem}
                     onSourceDragStart={handleSourceDragStart}
+                    onSourceTapLift={handleTapLiftSource}
                     onDragEnd={handleDragEnd}
                   />
                 );
@@ -2663,6 +2756,7 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
                     isDark={isDark}
                     draggingItem={draggingItem}
                     onSourceDragStart={handleSourceDragStart}
+                    onSourceTapLift={handleTapLiftSource}
                     onDragEnd={handleDragEnd}
                   />
                 );
@@ -2682,6 +2776,7 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
                     isDark={isDark}
                     draggingItem={draggingItem}
                     onSourceDragStart={handleSourceDragStart}
+                    onSourceTapLift={handleTapLiftSource}
                     onDragEnd={handleDragEnd}
                   />
                 );
@@ -2711,6 +2806,7 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
             className="flex flex-col gap-3"
             onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }}
             onDrop={handleDropOnLane('laneA')}
+            onClick={handleTapPlaceOnLane('laneA')}
           >
             <div className="flex items-center justify-between px-1">
               <div className="flex items-center gap-1.5">
@@ -2816,6 +2912,7 @@ export const HardwareDeck: React.FC<HardwareDeckProps> = ({
             className="flex flex-col gap-3 mt-1"
             onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }}
             onDrop={handleDropOnLane('laneB')}
+            onClick={handleTapPlaceOnLane('laneB')}
           >
             <div className="flex items-center justify-between px-1">
               <div className="flex items-center gap-1.5">

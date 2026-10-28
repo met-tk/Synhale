@@ -12,6 +12,7 @@ import { sanitizeParameterPatch } from '../dsp/parameterSafety';
  */
 
 import { GainParams, AudioEffectNode } from '../../types/audio';
+import { getPerformanceBudget } from '../../performance/budget';
 
 export class GainModule implements AudioEffectNode {
   public readonly id: string;
@@ -56,8 +57,9 @@ export class GainModule implements AudioEffectNode {
     this.dcBlocker.frequency.value = 12.0;
     this.dcBlocker.Q.value = 0.7071;
 
-    // Configure 4x oversampling soft-clipping curve (tanh curve)
-    this.softClipper.oversample = '4x';
+    // 软限幅过采样按性能预算降级 (high:4x / medium:2x / low:none)
+    const tier = getPerformanceBudget().tier;
+    this.softClipper.oversample = tier === 'high' ? '4x' : tier === 'medium' ? '2x' : 'none';
     this.softClipper.curve = this.generateSoftClipCurve() as unknown as Float32Array<ArrayBuffer>;
 
     // Initial gain calculation (0 dB = 1.0)
@@ -142,6 +144,10 @@ export class GainModule implements AudioEffectNode {
       const dry = this.currentParams.softClip ? 0.0 : 1.0;
       this.softClipWetGain.gain.setTargetAtTime(wet, now, 0.008);
       this.softClipDryGain.gain.setTargetAtTime(dry, now, 0.008);
+      // NOTE: We deliberately DO NOT disconnect the 4x softClipper when softClip=false.
+      // Topology changes on an actively-biased WaveShaper cause audible clicks ("滋滋声")
+      // in Chromium-based WebView. The dry/wet gain relay above already routes the
+      // signal around the shaper; its residual cost with zero input is negligible.
     }
 
     if (params.bypass !== undefined && params.bypass !== this.currentParams.bypass) {
@@ -158,6 +164,7 @@ export class GainModule implements AudioEffectNode {
       this.effectOutGain.gain.cancelScheduledValues(now);
       this.effectOutGain.gain.setValueAtTime(this.effectOutGain.gain.value, now);
       this.effectOutGain.gain.linearRampToValueAtTime(wetTarget, now + 0.005);
+      // NOTE: Same as above — no topology change on bypass.
     }
   }
 

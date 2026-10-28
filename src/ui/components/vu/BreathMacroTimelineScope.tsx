@@ -177,19 +177,19 @@ export const BreathMacroTimelineScope: React.FC<BreathMacroTimelineScopeProps> =
       } ${className}`}
     >
       {/* Top Header Label: Exclusively identifies Stage Envelope */}
-      <div className="flex items-center justify-between text-[9px] font-mono leading-none mb-1 px-1">
-        <span className={`uppercase tracking-wider flex items-center gap-1 ${
+      <div className="flex items-center justify-between gap-2 text-[9px] font-mono leading-none mb-1 px-1 whitespace-nowrap">
+        <span className={`uppercase tracking-wider flex items-center gap-1 min-w-0 truncate ${
           isDark ? 'text-slate-400' : 'text-neutral-500'
         }`}>
           <span
-            className={`inline-block w-1.5 h-1.5 rounded-full ${
+            className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${
               isPlaying ? 'bg-sky-400/80 animate-pulse' : 'bg-slate-500'
             }`}
           />
-          {label} · {currentTheme.name}
+          <span className="truncate">{label} · {currentTheme.name}</span>
         </span>
-        <div className="flex items-center gap-1.5">
-          <span className={`text-[8px] group-hover:text-sky-400 transition-colors ${
+        <div className="flex items-center gap-1.5 shrink-0">
+          <span className={`text-[8px] group-hover:text-sky-400 transition-colors whitespace-nowrap ${
             isDark ? 'text-slate-500' : 'text-neutral-400'
           }`}>
             [点击调节]

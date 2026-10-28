@@ -348,6 +348,26 @@ export class AmbientChannel implements AudioSourceNode {
       this.bypassGain.gain.cancelScheduledValues(now);
       this.bypassGain.gain.setValueAtTime(this.bypassGain.gain.value, now);
       this.bypassGain.gain.linearRampToValueAtTime(targetGain, now + 0.005);
+
+      // Deep bypass: stop the looping buffer source so it no longer consumes audio-thread
+      // CPU while bypassed. start() already handles "restart after stop" by recreating the
+      // source (see start() L268-284), so this is a safe topology-neutral CPU release.
+      // Defer the stop by 8ms so the 5ms bypassGain ramp fully reaches zero first.
+      if (params.bypass && this.isStarted) {
+        const srcToStop = this.bufferSource;
+        setTimeout(() => {
+          if (this.isDisposed || !this.currentParams.bypass) return;
+          try { srcToStop?.stop(); } catch { /* already stopped */ }
+          if (this.bufferSource === srcToStop) {
+            this.bufferSource = null;
+            this.sourceGain = null;
+          }
+          this.isStarted = false;
+        }, 8);
+      } else if (!params.bypass && !this.isStarted) {
+        // Restart the loop so unbypassing immediately produces sound.
+        this.start(this.ctx.currentTime);
+      }
     }
   }
 

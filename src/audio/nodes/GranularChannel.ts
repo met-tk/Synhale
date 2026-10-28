@@ -351,8 +351,12 @@ export class GranularChannel implements AudioSourceNode {
     while (this.nextParticleTime < now + lookAhead && cycleCount < 32) {
       cycleCount++;
       const triggerTime = this.nextParticleTime;
+      // Drop stale particles: if main-thread setInterval was throttled (Android WebView),
+      // triggering "catch-up" particles at a past audio time produces a burst of clicks.
+      // Skip any particle whose trigger time is already more than one interval in the past.
+      const isStale = triggerTime < now - interval;
       const prob = particleCfg.probability ?? 0.85;
-      if (Math.random() <= prob) {
+      if (!isStale && Math.random() <= prob) {
         const spray = Math.max(1, Math.min(4, Math.round(particleCfg.spray ?? 1)));
         for (let s = 0; s < spray; s++) {
           if (this.activeVoices.size >= maxDensity) {

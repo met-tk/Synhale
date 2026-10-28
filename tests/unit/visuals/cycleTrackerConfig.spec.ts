@@ -17,8 +17,10 @@ describe('Cycle Bead Strand Config Unit Tests', () => {
 
   it('returns defaults when nothing is stored', () => {
     const settings = loadCycleTrackerSettings();
-    expect(settings).toEqual({ visible: true, capacity: 12 });
+    expect(settings.visible).toBe(true);
+    expect(settings.capacity).toBe(12);
     expect(DEFAULT_CYCLE_TRACKER_SETTINGS.capacity).toBe(12);
+    expect(DEFAULT_CYCLE_TRACKER_SETTINGS.position).toBe('left');
     expect(CYCLE_CAPACITY_MIN).toBeLessThan(CYCLE_CAPACITY_MAX);
   });
 
@@ -35,25 +37,30 @@ describe('Cycle Bead Strand Config Unit Tests', () => {
   });
 
   it('round-trips valid settings through localStorage', () => {
-    saveCycleTrackerSettings({ visible: false, capacity: 21 });
+    saveCycleTrackerSettings({ visible: false, capacity: 21, position: 'top' });
     const loaded = loadCycleTrackerSettings();
-    expect(loaded).toEqual({ visible: false, capacity: 21 });
+    expect(loaded).toEqual({ visible: false, capacity: 21, position: 'top' });
     expect(localStorage.getItem(STORAGE_KEY)).toContain('"capacity":21');
   });
 
   it('repairs out-of-range or invalid persisted values on save and load', () => {
-    saveCycleTrackerSettings({ visible: true, capacity: 9999 });
+    saveCycleTrackerSettings({ visible: true, capacity: 9999, position: 'left' });
     expect(loadCycleTrackerSettings().capacity).toBe(CYCLE_CAPACITY_MAX);
 
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ visible: 'yes', capacity: -5 }));
-    expect(loadCycleTrackerSettings()).toEqual({ visible: true, capacity: CYCLE_CAPACITY_MIN });
+    const repaired = loadCycleTrackerSettings();
+    expect(repaired.visible).toBe(true);
+    expect(repaired.capacity).toBe(CYCLE_CAPACITY_MIN);
+    expect(repaired.position === 'left' || repaired.position === 'top').toBe(true);
 
     localStorage.setItem(STORAGE_KEY, JSON.stringify([1, 2, 3]));
-    expect(loadCycleTrackerSettings()).toEqual(DEFAULT_CYCLE_TRACKER_SETTINGS);
+    expect(loadCycleTrackerSettings().capacity).toBe(DEFAULT_CYCLE_TRACKER_SETTINGS.capacity);
   });
 
   it('falls back to defaults on corrupt storage payloads', () => {
     localStorage.setItem(STORAGE_KEY, '{corrupted json!!');
-    expect(loadCycleTrackerSettings()).toEqual(DEFAULT_CYCLE_TRACKER_SETTINGS);
+    const loaded = loadCycleTrackerSettings();
+    expect(loaded.visible).toBe(DEFAULT_CYCLE_TRACKER_SETTINGS.visible);
+    expect(loaded.capacity).toBe(DEFAULT_CYCLE_TRACKER_SETTINGS.capacity);
   });
 });

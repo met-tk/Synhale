@@ -11,6 +11,7 @@ import { sanitizeParameterPatch } from '../dsp/parameterSafety';
 
 import { EffectsChainParams, AudioEffectNode } from '../../types/audio';
 import { computeDriveMakeupGain, generateDriveCurve } from '../dsp/waveShaperCurves';
+import { getPerformanceBudget } from '../../performance/budget';
 
 export class DriveModule implements AudioEffectNode {
   public readonly id: string;
@@ -30,6 +31,20 @@ export class DriveModule implements AudioEffectNode {
     bypass: false
   };
 
+  // Threshold guard: rebuilding the waveshaper curve on a 4x-oversampled node is audible
+  // (resets internal filter state), so suppress micro-updates below perceptual delta.
+  private lastAppliedAmount = 0.0;
+  private lastAppliedTone = 0.5;
+  private static readonly CURVE_UPDATE_THRESHOLD = 0.005;
+
+  /**
+   * Curve cache: generateDriveCurve allocates a fresh Float32Array(2048) and runs a
+   * non-linear shaping loop. Caching by quantized (amount, tone) avoids redundant work
+   * during parameter sweeps; bounded LRU keeps memory flat.
+   */
+  private static curveCache = new Map<string, Float32Array>();
+  private static readonly CURVE_CACHE_MAX = 48;
+
   private isDisposed = false;
 
   constructor(ctx: BaseAudioContext, id = 'drive') {
@@ -45,8 +60,9 @@ export class DriveModule implements AudioEffectNode {
     this.driveOutGain = ctx.createGain();
     this.bypassDryGain = ctx.createGain();
 
-    // 4x oversampling is mandatory for anti-aliasing
-    this.waveShaper.oversample = '4x';
+    // 4x 过采样是抗混叠最优解,但按性能预算降级 (medium:2x / low:none) 以保中低端流畅
+    const tier = getPerformanceBudget().tier;
+    this.waveShaper.oversample = tier === 'high' ? '4x' : tier === 'medium' ? '2x' : 'none';
 
     // 12Hz DC blocker highpass filter to eliminate DC offset from asymmetric tube saturation
     this.dcBlocker.type = 'highpass';
@@ -77,9 +93,27 @@ export class DriveModule implements AudioEffectNode {
   }
 
   private updateCurve(): void {
-    // Generate saturated curve combining amount and tone directly in transfer curve
-    const curve = generateDriveCurve(this.currentParams.amount, this.currentParams.tone);
+    // Quantize to share cache entries across imperceptible parameter deltas
+    const qAmount = Math.round(this.currentParams.amount * 200) / 200;
+    const qTone = Math.round(this.currentParams.tone * 200) / 200;
+    const key = `${qAmount}|${qTone}`;
+
+    let curve = DriveModule.curveCache.get(key);
+    if (!curve) {
+      curve = generateDriveCurve(this.currentParams.amount, this.currentParams.tone) as unknown as Float32Array;
+      if (DriveModule.curveCache.size >= DriveModule.CURVE_CACHE_MAX) {
+        const firstKey = DriveModule.curveCache.keys().next().value;
+        if (firstKey !== undefined) DriveModule.curveCache.delete(firstKey);
+      }
+      DriveModule.curveCache.set(key, curve);
+    } else {
+      // Refresh LRU
+      DriveModule.curveCache.delete(key);
+      DriveModule.curveCache.set(key, curve);
+    }
     this.waveShaper.curve = curve as unknown as Float32Array<ArrayBuffer>;
+    this.lastAppliedAmount = this.currentParams.amount;
+    this.lastAppliedTone = this.currentParams.tone;
   }
 
   setParams(params: Partial<EffectsChainParams['drive']>): void {
@@ -90,14 +124,20 @@ export class DriveModule implements AudioEffectNode {
 
     if (params.tone !== undefined && params.tone !== this.currentParams.tone) {
       this.currentParams.tone = Math.max(0, Math.min(1, params.tone));
-      curveNeedsUpdate = true;
+      // Only rebuild curve when delta is perceptually meaningful
+      if (Math.abs(this.currentParams.tone - this.lastAppliedTone) >= DriveModule.CURVE_UPDATE_THRESHOLD) {
+        curveNeedsUpdate = true;
+      }
     }
 
     if (params.amount !== undefined && params.amount !== this.currentParams.amount) {
       this.currentParams.amount = Math.max(0, Math.min(1, params.amount));
       const makeup = computeDriveMakeupGain(this.currentParams.amount);
       this.makeupGain.gain.setTargetAtTime(makeup, now, 0.015);
-      curveNeedsUpdate = true;
+      // Only rebuild curve when delta is perceptually meaningful
+      if (Math.abs(this.currentParams.amount - this.lastAppliedAmount) >= DriveModule.CURVE_UPDATE_THRESHOLD) {
+        curveNeedsUpdate = true;
+      }
     }
 
     if (curveNeedsUpdate) {
@@ -118,6 +158,12 @@ export class DriveModule implements AudioEffectNode {
       this.driveOutGain.gain.cancelScheduledValues(now);
       this.driveOutGain.gain.setValueAtTime(this.driveOutGain.gain.value, now);
       this.driveOutGain.gain.linearRampToValueAtTime(wetTarget, now + 0.005);
+
+      // NOTE: We deliberately DO NOT disconnect inputNode from waveShaper.
+      // Topology changes on the input side of an actively-biased WaveShaper (its 4x
+      // oversampling state holds residual signal) cause audible clicks ("滋滋声")
+      // in Chromium-based WebView. The dry/wet relay above already silences the
+      // wet path; the residual cost of an idle shaper is far smaller than the click risk.
     }
   }
 

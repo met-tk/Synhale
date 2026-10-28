@@ -12,6 +12,7 @@
 import { EffectsChainParams, AudioEffectNode } from '../../types/audio';
 import { computeEqualPowerMix, generateSyntheticImpulseResponse } from '../dsp/syntheticReverb';
 import { sanitizeParameterPatch } from '../dsp/parameterSafety';
+import { getPerformanceBudget } from '../../performance/budget';
 
 export class ConvolverReverb implements AudioEffectNode {
   public readonly id: string;
@@ -37,6 +38,22 @@ export class ConvolverReverb implements AudioEffectNode {
   private isPurged = false;
   private isDisposed = false;
   private irDebounceTimer: any = null;
+  /** 激进旁路:延迟断开 Convolver 的定时器与状态 */
+  private bypassDisconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private convolverInputDisconnected = false;
+
+  /**
+   * IR cache: generating a multi-second stereo impulse response involves white-noise
+   * synthesis, biquad filtering and envelope shaping on the main thread. Caching by
+   * quantized (decayTime, damping) avoids regenerating identical IRs during parameter
+   * sweeps and dramatically reduces CPU spikes on Android WebView.
+   *
+   * Shared across all ConvolverReverb instances for the same AudioContext sample rate.
+   * Bounded to a small LRU set to avoid unbounded memory growth on long sessions.
+   */
+  private static irCache = new Map<string, AudioBuffer>();
+  private static readonly IR_CACHE_MAX = 24;
+  private lastIrKey = '';
 
   constructor(ctx: BaseAudioContext, id = 'reverb') {
     this.id = id;
@@ -89,12 +106,36 @@ export class ConvolverReverb implements AudioEffectNode {
 
   private updateImpulseResponse(): void {
     try {
-      const buffer = generateSyntheticImpulseResponse(
-        this.ctx,
-        this.currentParams.decayTime,
-        this.currentParams.damping
-      );
+      // Quantize parameters so near-identical IRs share a cache entry
+      const qDecay = Math.round(this.currentParams.decayTime * 100) / 100;
+      const qDamp = Math.round(this.currentParams.damping * 100) / 100;
+      const key = `${this.ctx.sampleRate}|${qDecay}|${qDamp}`;
+
+      if (key === this.lastIrKey) return; // no-op
+
+      let buffer = ConvolverReverb.irCache.get(key);
+      if (!buffer) {
+        buffer = generateSyntheticImpulseResponse(
+          this.ctx,
+          this.currentParams.decayTime,
+          this.currentParams.damping
+        );
+        // Simple LRU: evict oldest entry when over capacity
+        if (ConvolverReverb.irCache.size >= ConvolverReverb.IR_CACHE_MAX) {
+          const firstKey = ConvolverReverb.irCache.keys().next().value;
+          if (firstKey !== undefined) {
+            ConvolverReverb.irCache.delete(firstKey);
+          }
+        }
+        ConvolverReverb.irCache.set(key, buffer);
+      } else {
+        // Refresh LRU position
+        ConvolverReverb.irCache.delete(key);
+        ConvolverReverb.irCache.set(key, buffer);
+      }
+
       this.convolver.buffer = buffer;
+      this.lastIrKey = key;
     } catch {
       // In case context is in closed or mock state
     }
@@ -155,6 +196,49 @@ export class ConvolverReverb implements AudioEffectNode {
       this.effectOutGain.gain.cancelScheduledValues(now);
       this.effectOutGain.gain.setValueAtTime(this.effectOutGain.gain.value, now);
       this.effectOutGain.gain.linearRampToValueAtTime(wetTarget, now + 0.005);
+
+      // NOTE (high tier): We deliberately DO NOT disconnect inputNode from reverbInGain.
+      // ConvolverNode has a long FFT history window; cutting its input mid-stream causes
+      // the tail to truncate abruptly, producing audible clicks in Chromium WebView.
+      //
+      // Aggressive bypass (mid/low tier): once the wet path is fully faded out (silence),
+      // physically disconnect the convolver input so the FFT engine stops burning CPU
+      // while bypassed. Reconnect happens before the fade-in, and the wet gain is
+      // re-ramped to avoid any re-entry transient.
+      if (getPerformanceBudget().aggressiveBypassDisconnect) {
+        if (this.bypassDisconnectTimer) {
+          clearTimeout(this.bypassDisconnectTimer);
+          this.bypassDisconnectTimer = null;
+        }
+        if (isBypassed) {
+          // 等 5ms 继电器淡出 + 混响尾自然衰减一小段后再断开 (输出已静音,断开不可闻)
+          this.bypassDisconnectTimer = setTimeout(() => {
+            this.bypassDisconnectTimer = null;
+            if (this.isDisposed || !this.currentParams.bypass || this.isPurged) return;
+            if (this.convolverInputDisconnected) return;
+            try {
+              this.reverbInGain.disconnect();
+              this.convolverInputDisconnected = true;
+            } catch {
+              // Already disconnected or closed context
+            }
+          }, 60);
+        } else {
+          if (this.convolverInputDisconnected) {
+            try {
+              this.reverbInGain.connect(this.convolver);
+            } catch {
+              // Closed context
+            }
+            this.convolverInputDisconnected = false;
+            // 先静音 wet,3ms 微斜坡回到目标值,杜绝重连瞬态爆音
+            const { wet } = computeEqualPowerMix(this.currentParams.mix);
+            this.wetGain.gain.cancelScheduledValues(now);
+            this.wetGain.gain.setValueAtTime(0.0, now);
+            this.wetGain.gain.linearRampToValueAtTime(wet, now + 0.003);
+          }
+        }
+      }
     }
   }
 
@@ -213,6 +297,10 @@ export class ConvolverReverb implements AudioEffectNode {
     if (this.irDebounceTimer) {
       clearTimeout(this.irDebounceTimer);
       this.irDebounceTimer = null;
+    }
+    if (this.bypassDisconnectTimer) {
+      clearTimeout(this.bypassDisconnectTimer);
+      this.bypassDisconnectTimer = null;
     }
     this.disconnect();
     this.inputNode.disconnect();

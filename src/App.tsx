@@ -24,7 +24,8 @@ import {
   Copy,
   Plus,
   ChevronRight,
-  ArrowLeftRight
+  ArrowLeftRight,
+  RotateCcw
 } from 'lucide-react';
 import { ThemeProvider, useTheme } from './ui/theme';
 import { CenterBreathIndicator } from './ui/components/indicator';
@@ -41,6 +42,11 @@ import {
   saveCycleTrackerSettings,
   type CycleTrackerSettings
 } from './visuals/cycleTrackerConfig';
+import {
+  loadDeckScale,
+  saveDeckScale,
+  clampDeckScale
+} from './ui/theme/deckScaleConfig';
 import { HardwareDeck } from './ui/components/deck';
 import { BottomSheetDrawer, DrawerItem } from './ui/components/drawer';
 import { SettingsModal, CustomRhythmModal } from './ui/components/settings';
@@ -52,6 +58,7 @@ import {
 } from './audio/cue/breathCueConfig';
 import { playCueSound, preloadAllCueSounds, stopCueSounds } from './audio/cue/breathCuePlayer';
 import { AudioEngine, DEFAULT_CHANNEL_STRIP, DEFAULT_EFFECTS_CHAIN } from './audio/engine';
+import { prewarmAllAudioSamples } from './audio/prewarmAudio';
 import {
   SOUND_PRESETS,
   getSoundPresetById,
@@ -68,9 +75,15 @@ import {
 } from './audio/storage/userPresets';
 import { BreathEngine } from './breath/engine';
 import {
+  loadSessionPreferences,
+  saveSessionPreferences,
+  visualGroupIndexOf
+} from './storage/sessionPreferences';
+import {
   FACTORY_RHYTHMS,
   getUserRhythms,
   deleteUserRhythm,
+  getRhythmPreset,
   type UserRhythmConfig
 } from './breath/storage';
 import { CanvasRenderer, setupCanvasDPI, createCanvasPointerHandlers, isWithinGeometry } from './visuals';
@@ -106,6 +119,8 @@ import {
 } from './types/audio';
 import { DEFAULT_MODULATION_ROUTES } from './ui/components/deck/HardwareDeck';
 import { useModalDialog } from './ui/hooks/useModalDialog';
+import { IS_TOUCH_DEVICE } from './ui/hooks/touchDevice';
+import { getPerformanceBudget, capDpr } from './performance/budget';
 
 const INITIAL_SNAPSHOT: BreathClockSnapshot = {
   isPlaying: false,
@@ -126,6 +141,9 @@ function SynhaleApp(): React.JSX.Element {
   const { isDark, toggleTheme, palette, setThemeId } = useTheme();
   const themeBgRef = useRef<string>(palette.bg);
 
+  // Restored session-level user preferences (visual preset / group, rhythm, sound preset)
+  const sessionPrefsRefInit = useMemo(() => loadSessionPreferences(), []);
+
   // Engine references
   const audioEngineRef = useRef<AudioEngine | null>(null);
   const breathEngineRef = useRef<BreathEngine | null>(null);
@@ -137,17 +155,31 @@ function SynhaleApp(): React.JSX.Element {
   const mountedRef = useRef(false);
   const playbackPendingRef = useRef(false);
   const isPlayingRef = useRef<boolean>(false);
-  const visualPresetRef = useRef<VisualPresetId>('spacetimeWarp');
+  const visualPresetRef = useRef<VisualPresetId>(sessionPrefsRefInit.visualPreset);
   const clockSnapshotRef = useRef<BreathClockSnapshot>(INITIAL_SNAPSHOT);
   const isDarkRef = useRef<boolean>(isDark);
+  /** Last wall-clock ms when we pushed a clockSnapshot setState (throttling). */
+  const lastClockStatePushMsRef = useRef<number>(0);
 
   // Reactive UI state
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [operationError, setOperationError] = useState<string | null>(null);
+  // First-run audio preload: show deterministic progress while every sample buffer is decoded
+  const [audioPrewarmProgress, setAudioPrewarmProgress] = useState<number | null>(null);
+  // The overlay is opt-in: only shown when the user presses play while the silent
+  // startup preload is still running. Automatic startup preload never shows it.
+  const [showPrewarmOverlay, setShowPrewarmOverlay] = useState(false);
+  const prewarmCompleteRef = useRef(false);
   const [clockSnapshot, setClockSnapshot] = useState<BreathClockSnapshot>(INITIAL_SNAPSHOT);
-  const [visualPreset, setVisualPreset] = useState<VisualPresetId>('spacetimeWarp');
+  const [visualPreset, setVisualPreset] = useState<VisualPresetId>(() => sessionPrefsRefInit.visualPreset);
   const [isSoundDrawerOpen, setIsSoundDrawerOpen] = useState<boolean>(false);
-  const [activeSoundPresetKey, setActiveSoundPresetKey] = useState<string>(DEFAULT_SOUND_PRESET_ID);
+  const [activeSoundPresetKey, setActiveSoundPresetKey] = useState<string>(() => {
+    const saved = sessionPrefsRefInit.activeSoundPresetKey;
+    const exists = getAllFactoryPresets().some(p => p.id === saved)
+      || getUserPresets().some(p => p.id === saved)
+      || Object.prototype.hasOwnProperty.call(SOUND_PRESETS, saved);
+    return exists ? saved : DEFAULT_SOUND_PRESET_ID;
+  });
   const [customPresets, setCustomPresets] = useState<SoundPreset[]>(() => getUserPresets());
   const [isSavePresetModalOpen, setIsSavePresetModalOpen] = useState<boolean>(false);
   const [newPresetName, setNewPresetName] = useState<string>('');
@@ -156,7 +188,16 @@ function SynhaleApp(): React.JSX.Element {
   const [editingPresetName, setEditingPresetName] = useState<string>('');
   const [deletingPreset, setDeletingPreset] = useState<{ id: string; name: string } | null>(null);
   const [channelStrip, setChannelStrip] = useState<ChannelStripParams>(() => {
-    const initial = SOUND_PRESETS[DEFAULT_SOUND_PRESET_ID]?.channelStrip || DEFAULT_CHANNEL_STRIP;
+    const restoredId = (() => {
+      const saved = sessionPrefsRefInit.activeSoundPresetKey;
+      const exists = getAllFactoryPresets().some(p => p.id === saved)
+        || getUserPresets().some(p => p.id === saved)
+        || Object.prototype.hasOwnProperty.call(SOUND_PRESETS, saved);
+      return exists ? saved : DEFAULT_SOUND_PRESET_ID;
+    })();
+    const restoredPreset = getUserPresets().find(p => p.id === restoredId)
+      || getSoundPresetById(restoredId);
+    const initial = restoredPreset.channelStrip || DEFAULT_CHANNEL_STRIP;
     const res: ChannelStripParams = {
       ...DEFAULT_CHANNEL_STRIP,
       ...initial,
@@ -170,7 +211,9 @@ function SynhaleApp(): React.JSX.Element {
     return res;
   });
   const [effects, setEffects] = useState<EffectsChainParams>(
-    SOUND_PRESETS[DEFAULT_SOUND_PRESET_ID]?.effects || DEFAULT_EFFECTS_CHAIN
+    () => getUserPresets().find(p => p.id === activeSoundPresetKey)?.effects
+      || getSoundPresetById(activeSoundPresetKey)?.effects
+      || DEFAULT_EFFECTS_CHAIN
   );
   const [modulationRoutes, setModulationRoutes] = useState<Record<string, ModulationRoute>>(DEFAULT_MODULATION_ROUTES);
   const [sourceRoutes, setSourceRoutes] = useState<SourceRouteMap>(DEFAULT_SOURCE_ROUTES);
@@ -193,7 +236,14 @@ function SynhaleApp(): React.JSX.Element {
   ]);
   const [hoveredHudBay, setHoveredHudBay] = useState<string | null>(null);
   const [isRhythmDrawerOpen, setIsRhythmDrawerOpen] = useState<boolean>(false);
-  const [activeRhythmKey, setActiveRhythmKey] = useState<string>('box');
+  const [activeRhythmKey, setActiveRhythmKey] = useState<string>(() => {
+    const saved = sessionPrefsRefInit.activeRhythmKey;
+    const exists = Object.prototype.hasOwnProperty.call(FACTORY_RHYTHMS, saved)
+      || getUserRhythms().some(r => r.id === saved);
+    return exists ? saved : 'box';
+  });
+  const activeRhythmKeyRef = useRef(activeRhythmKey);
+  activeRhythmKeyRef.current = activeRhythmKey;
   const [userRhythms, setUserRhythms] = useState<UserRhythmConfig[]>(() => getUserRhythms());
   const [isCustomRhythmModalOpen, setIsCustomRhythmModalOpen] = useState<boolean>(false);
   const [editingRhythm, setEditingRhythm] = useState<UserRhythmConfig | null>(null);
@@ -243,6 +293,26 @@ function SynhaleApp(): React.JSX.Element {
     cycleTrackerRef.current = newSettings;
     saveCycleTrackerSettings(newSettings);
   }, []);
+
+  // Hardware Deck Content Scale (60..130, CSS transform scoped to the deck console only)
+  const [deckScale, setDeckScale] = useState<number>(() => loadDeckScale());
+  const handleDeckScaleChange = useCallback((newScale: number) => {
+    const clamped = clampDeckScale(newScale);
+    setDeckScale(clamped);
+    saveDeckScale(clamped);
+  }, []);
+
+  // Session-level user preference persistence: remember the last selected
+  // visual preset, breath rhythm and sound preset across app restarts.
+  useEffect(() => {
+    saveSessionPreferences({ visualPreset });
+  }, [visualPreset]);
+  useEffect(() => {
+    saveSessionPreferences({ activeRhythmKey });
+  }, [activeRhythmKey]);
+  useEffect(() => {
+    saveSessionPreferences({ activeSoundPresetKey });
+  }, [activeSoundPresetKey]);
 
   // Desktop Native Frameless Window State
   const [isElectronApp, setIsElectronApp] = useState<boolean>(() => {
@@ -312,8 +382,9 @@ function SynhaleApp(): React.JSX.Element {
   // 1. Initialize Breath Engine & Master Clock Subscriber
   useEffect(() => {
     mountedRef.current = true;
+    const initialRhythm = getRhythmPreset(activeRhythmKeyRef.current);
     const breathEngine = new BreathEngine({
-      rhythm: FACTORY_RHYTHMS.box,
+      rhythm: initialRhythm,
       autoStart: false
     });
     breathEngineRef.current = breathEngine;
@@ -326,15 +397,23 @@ function SynhaleApp(): React.JSX.Element {
 
     const unsubscribe = breathEngine.onTick((snapshot) => {
       clockSnapshotRef.current = snapshot;
-      setClockSnapshot(snapshot);
 
-      // Broadcast breath macro to running audio engine
+      // Broadcast breath macro to running audio engine — keep at full tick rate for audio fidelity
       if (audioEngineRef.current && isPlayingRef.current) {
         audioEngineRef.current.updateBreathModulation(
           snapshot.breathMacro,
           snapshot.currentStage,
           snapshot.stageProgress
         );
+      }
+
+      // Throttle React setState to the budget's modulation rate to avoid 60Hz full-tree
+      // reconciliation on mid/low-end devices. Audio updates above still run every tick.
+      const budget = getPerformanceBudget();
+      const nowMs = performance.now();
+      if (nowMs - lastClockStatePushMsRef.current >= budget.modulationThrottleMs) {
+        lastClockStatePushMsRef.current = nowMs;
+        setClockSnapshot(snapshot);
       }
     });
 
@@ -404,7 +483,7 @@ function SynhaleApp(): React.JSX.Element {
         const rect = parent ? parent.getBoundingClientRect() : canvas.getBoundingClientRect();
         cachedWidth = rect.width;
         cachedHeight = rect.height;
-        cachedDpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
+        cachedDpr = capDpr(typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1);
       }
     };
 
@@ -471,7 +550,92 @@ function SynhaleApp(): React.JSX.Element {
     };
   }, []);
 
+  // 2b. Mobile power management: suspend audio + stop canvas when WebView is hidden.
+  // On Android Capacitor, the WebView does NOT automatically suspend the AudioContext
+  // or cancel rAF, so background playback would continue burning battery.
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+
+    let wasPlayingBeforeHide = false;
+
+    const handleVisibilityChange = () => {
+      const engine = audioEngineRef.current;
+      const breath = breathEngineRef.current;
+      const renderer = canvasRendererRef.current;
+
+      if (document.hidden) {
+        // Capture state so we can resume cleanly on foreground.
+        wasPlayingBeforeHide = isPlayingRef.current;
+
+        // Stop the canvas rAF loop first — cheap and immediate.
+        renderer?.stop();
+
+        // Suspend the audio context (silences output and releases the audio thread).
+        // AudioEngine.suspend() internally runs executeZeroResidueHardCut for a clean stop.
+        if (engine && wasPlayingBeforeHide) {
+          engine.suspend().catch(() => { /* ignore */ });
+        }
+
+        // Pause the breath clock so the tick loop stops driving modulation.
+        if (breath && wasPlayingBeforeHide) {
+          breath.pause();
+        }
+      } else {
+        // Resume in reverse order: resume audio context first (async), THEN breath clock,
+        // then restart canvas. The next breath tick will drive updateBreathModulation
+        // against a fully-running AudioContext — scheduling params against a suspended
+        // context would still queue them, but waiting avoids a burst of catch-up events.
+        if (engine && wasPlayingBeforeHide) {
+          engine.resume()
+            .catch(() => { /* ignore */ })
+            .finally(() => {
+              if (breath && wasPlayingBeforeHide) {
+                breath.start();
+              }
+            });
+        } else if (breath && wasPlayingBeforeHide) {
+          breath.start();
+        }
+        // Canvas renderer is driven by its own rAF loop; if it was started before, the
+        // next render effect re-run won't happen automatically, so we must restart it
+        // explicitly. The `start` method already stops any previous loop internally.
+        const canvas = canvasRef.current;
+        if (canvas && renderer) {
+          // Re-run the same getParams closure used by the primary canvas effect.
+          // We duplicate the minimal wiring here to avoid coupling the two effects.
+          renderer.start(canvas, () => {
+            const snapshot = clockSnapshotRef.current;
+            return {
+              width: canvas.clientWidth,
+              height: canvas.clientHeight,
+              dpr: capDpr(window.devicePixelRatio || 1),
+              breathMacro: snapshot.breathMacro,
+              stage: snapshot.currentStage,
+              stageProgress: snapshot.stageProgress,
+              isDarkTheme: isDarkRef.current,
+              background: themeBgRef.current,
+              preset: visualPresetRef.current,
+              oscAActivity: isPlayingRef.current ? 0.8 : 0.0,
+              oscBActivity: isPlayingRef.current ? 0.6 : 0.0,
+              showMaxBoundary: true,
+              hideBoundaryGuide: true
+            };
+          });
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, []);
+
   // 3. Audio Initialization with concurrency mutex lock
+  // `silent`: true for the automatic startup preload (never renders the blocking
+  // overlay); false when triggered from play so the overlay shows if loading is
+  // still in flight. `ensureAudioInitialized` itself never toggles the overlay —
+  // callers decide whether to surface progress to the user.
   const ensureAudioInitialized = useCallback(async () => {
     if (initPromiseRef.current) {
       return initPromiseRef.current;
@@ -502,6 +666,28 @@ function SynhaleApp(): React.JSX.Element {
           }
           if (laneAOrderRef.current) engine.reorderLaneEffects('laneA', laneAOrderRef.current);
           if (laneBOrderRef.current) engine.reorderLaneEffects('laneB', laneBOrderRef.current);
+
+          // Eagerly preload every sample library with deterministic progress UI.
+          // Engine output is still muted by executeZeroResidueHardCut above, so the
+          // decode work happens in silence; failures are tolerated per-file.
+          const prewarmCtx = engine.getContext();
+          if (prewarmCtx && mountedRef.current) {
+            setAudioPrewarmProgress(0);
+            try {
+              await prewarmAllAudioSamples(prewarmCtx, (p) => {
+                if (mountedRef.current) setAudioPrewarmProgress(p.progress);
+              });
+            } finally {
+              prewarmCompleteRef.current = true;
+              if (mountedRef.current) {
+                setAudioPrewarmProgress(null);
+                setShowPrewarmOverlay(false);
+              }
+            }
+          } else {
+            prewarmCompleteRef.current = true;
+          }
+
           preloadAllCueSounds(engine.getContext());
         }
       } catch (error) {
@@ -517,6 +703,13 @@ function SynhaleApp(): React.JSX.Element {
       if (initPromiseRef.current === initTask) initPromiseRef.current = null;
     }
   }, []);
+
+  // 3b. Silent startup preload: kick off on mount so the sample caches are warm
+  // long before the user presses play. The blocking progress overlay stays
+  // hidden; if play is pressed first, togglePlayPause flips it on.
+  useEffect(() => {
+    void ensureAudioInitialized();
+  }, [ensureAudioInitialized]);
 
   const handleModulationRouteAssign = useCallback((knobId: string, route: ModulationRoute | null) => {
     setModulationRoutes(prev => {
@@ -542,6 +735,9 @@ function SynhaleApp(): React.JSX.Element {
     if (playbackPendingRef.current) return;
     playbackPendingRef.current = true;
     setOperationError(null);
+    // If the silent startup preload is still decoding, surface the progress
+    // overlay; when it is already done this is a no-op and playback starts cold.
+    if (!prewarmCompleteRef.current) setShowPrewarmOverlay(true);
     try {
       await ensureAudioInitialized();
       const audioEngine = audioEngineRef.current;
@@ -563,6 +759,17 @@ function SynhaleApp(): React.JSX.Element {
       playbackPendingRef.current = false;
     }
   }, [ensureAudioInitialized, pausePlaybackNow]);
+
+  // 4a. Reset breathing session: clear the bead strand / cycle count and
+  // immediately begin a fresh cycle. If playback was running it continues
+  // seamlessly from the start of inhale; if paused it stays paused, reset.
+  const handleResetBreathSession = useCallback(() => {
+    const breathEngine = breathEngineRef.current;
+    if (!breathEngine) return;
+    const wasPlaying = isPlayingRef.current;
+    breathEngine.stop();
+    if (wasPlaying) breathEngine.resume();
+  }, []);
 
   // 5. Canvas Tap Handlers (Constrained to central breathing geometry area)
   const pointerHandlers = useMemo(() => {
@@ -1357,7 +1564,9 @@ function SynhaleApp(): React.JSX.Element {
     };
   }, []);
 
-  const [visualGroupIndex, setVisualGroupIndex] = useState<0 | 1 | 2>(2);
+  const [visualGroupIndex, setVisualGroupIndex] = useState<0 | 1 | 2>(
+    () => visualGroupIndexOf(visualPresetRef.current)
+  );
   const [capsuleDragX, setCapsuleDragX] = useState<number>(0);
   const capsuleSwipeRef = useRef<{
     active: boolean;
@@ -1505,9 +1714,9 @@ function SynhaleApp(): React.JSX.Element {
 
         {/* Center Anchor: Layout 1 - Two completely independent tactile modules.
             Absolutely centered against the full header width so wide right-side
-            controls cannot push the pair off-center; falls back to flow layout
-            on narrow viewports where true centering would collide. */}
-        <div className="flex items-center gap-3 titlebar-no-drag absolute left-1/2 -translate-x-1/2 max-md:static max-md:left-auto max-md:translate-x-0">
+            controls cannot push the pair off-center; on narrow viewports the pair
+            aligns right next to the right-side controls (true centering would collide). */}
+        <div className="flex items-center gap-3 titlebar-no-drag absolute left-1/2 -translate-x-1/2 max-md:static max-md:left-auto max-md:translate-x-0 max-md:ml-auto max-md:mr-3 max-md:gap-2.5">
           <button
             type="button"
             onClick={() => setIsRhythmDrawerOpen(true)}
@@ -1648,6 +1857,28 @@ function SynhaleApp(): React.JSX.Element {
         </div>
       )}
 
+      {/* First-run audio preload overlay: shows deterministic progress while every
+          sample buffer is decoded into memory. Blocks interaction with the play
+          button so the very first note is guaranteed click-free. */}
+      {audioPrewarmProgress !== null && showPrewarmOverlay && (
+        <div className={`fixed inset-0 z-[200] flex flex-col items-center justify-center gap-6 backdrop-blur-md ${
+          isDark ? 'bg-black/70' : 'bg-white/80'
+        }`}>
+          <div className={`text-sm tracking-widest uppercase font-sans ${isDark ? 'text-neutral-400' : 'text-neutral-500'}`}>
+            正在加载音频资源
+          </div>
+          <div className={`w-64 h-1 rounded-full overflow-hidden ${isDark ? 'bg-neutral-800' : 'bg-neutral-200'}`}>
+            <div
+              className={`h-full transition-[width] duration-200 ease-out ${isDark ? 'bg-sky-400' : 'bg-sky-500'}`}
+              style={{ width: `${Math.round(audioPrewarmProgress * 100)}%` }}
+            />
+          </div>
+          <div className={`text-xs tabular-nums ${isDark ? 'text-neutral-500' : 'text-neutral-400'}`}>
+            {Math.round(audioPrewarmProgress * 100)}%
+          </div>
+        </div>
+      )}
+
       {/* 2. Fullscreen Sacred Geometry Canvas */}
       <main className="relative flex-1 w-full h-full overflow-hidden">
         <canvas
@@ -1679,7 +1910,62 @@ function SynhaleApp(): React.JSX.Element {
             cycleProgress={clockSnapshot.cycleProgress}
             isPlaying={isPlaying}
             isDarkTheme={isDark}
+            position={cycleTrackerSettings.position}
           />
+        )}
+
+        {/* Reset Session Button: sits right next to the bead strand (below the
+            vertical mala / beside the horizontal strand). Clears progress and
+            starts a brand-new breathing cycle. */}
+        {cycleTrackerSettings.visible && (
+          <button
+            type="button"
+            onClick={handleResetBreathSession}
+            data-testid="reset-breath-session"
+            aria-label="重置呼吸周期，清空进度并开始新的呼吸周期"
+            title="重置呼吸周期"
+            className={`absolute z-10 w-7 h-7 rounded-full border flex items-center justify-center transition-all backdrop-blur-md ${
+              isDark
+                ? 'border-neutral-800/80 bg-neutral-950/60 text-neutral-400 hover:text-white hover:border-neutral-600'
+                : 'border-neutral-200 bg-white/70 text-neutral-500 hover:text-neutral-900 hover:border-neutral-400 shadow-sm'
+            }`}
+            style={
+              cycleTrackerSettings.position === 'left'
+                ? // Vertical mala column: strand sits at left-5 (1.25rem) with
+                  // svg width 28px, so its center x = 20px + 14px = 34px.
+                  // Button width is 28px, so left = 34px - 14px = 20px (1.25rem)
+                  // horizontally centers the button with the mala. Bottom edge
+                  // of the mala svg is at calc(50% + min(34vh, 260px)) from top;
+                  // place the button 12px below that for a snug stack.
+                  {
+                    left: '1.25rem',
+                    top: 'calc(50% + min(34vh, 260px) + 12px)'
+                  }
+                : // Horizontal strand row: the strand container sits at top-6
+                  // (1.5rem = 24px). Its svg is rendered at width min(78vw, 520px)
+                  // with aspect 520:28, so its rendered height is
+                  //   min(78vw, 520px) * 28/520 = min(4.2vw, 28px)
+                  // and the bead center-line sits at half of that below the
+                  // container top. Bead center y from viewport top:
+                  //   24px + min(4.2vw, 28px) / 2 = 24px + min(2.1vw, 14px)
+                  // Button height is 28px, so to vertically center the button
+                  // with the strand:
+                  //   buttonTop = beadCenterY - 14px
+                  //             = 24px + min(2.1vw, 14px) - 14px
+                  //             = 10px + min(2.1vw, 14px)
+                  {
+                    top: 'calc(10px + min(2.1vw, 14px))',
+                    // min(39vw, 260px, 50vw - 48px):
+                    //   - 39vw  = strand half-width on narrow screens
+                    //   - 260px = strand half-width on wide screens
+                    //   - 50vw-48px = safety so button right edge stays 8px from viewport edge
+                    //     (28px button + 12px gap + 8px safe inset = 48px)
+                    left: `calc(50% + min(39vw, 260px, 50vw - 48px) + 12px)`
+                  }
+            }
+          >
+            <RotateCcw size={13} strokeWidth={1.75} />
+          </button>
         )}
 
         {/* 3. Floating Bottom Controls: Fluid Morphing Pill Capsule + Sequential Next Preset Button */}
@@ -1703,7 +1989,7 @@ function SynhaleApp(): React.JSX.Element {
             onWheel={handleCapsuleWheel}
             style={{ touchAction: 'pan-y' }}
             title="左右滑动切换动效组"
-            className={`pointer-events-auto relative flex items-center gap-2 px-2 py-1.5 rounded-full border backdrop-blur-xl transition-all select-none cursor-grab active:cursor-grabbing ${
+            className={`pointer-events-auto relative flex items-center gap-2 max-md:gap-2.5 px-2 max-md:px-4 py-1.5 rounded-full border backdrop-blur-xl transition-all select-none cursor-grab active:cursor-grabbing ${
               isDark
                 ? 'border-neutral-800/80 bg-neutral-950/75 text-neutral-300 shadow-[0_8px_32px_rgba(0,0,0,0.5)] ring-1 ring-white/[0.04]'
                 : 'border-neutral-200/80 bg-white/75 text-neutral-800 shadow-[0_8px_30px_rgba(0,0,0,0.04),0_1px_3px_rgba(0,0,0,0.02)] ring-1 ring-black/[0.03]'
@@ -1801,14 +2087,14 @@ function SynhaleApp(): React.JSX.Element {
                           onMouseEnter={() => triggerVisualHint(p.labelZh, p.label)}
                           aria-pressed={isSelected}
                           aria-label={`${p.labelZh} (${p.label})`}
-                          className={`h-7 flex items-center justify-center rounded-full transition-all duration-300 font-semibold ${
+                          className={`h-7 max-md:h-8 flex items-center justify-center rounded-full transition-all duration-300 font-semibold ${
                             isSelected
                               ? isDark
-                                ? 'px-2.5 gap-1.5 bg-white/[0.12] text-white ring-1 ring-white/15 shadow-[0_0_12px_rgba(255,255,255,0.08),inset_0_1px_1px_rgba(255,255,255,0.2)]'
-                                : 'px-2.5 gap-1.5 bg-neutral-900/[0.08] text-neutral-950 ring-1 ring-neutral-900/10 shadow-[inset_0_1px_1px_rgba(255,255,255,0.8),0_1px_2px_rgba(0,0,0,0.04)]'
+                                ? 'px-2.5 max-md:px-3.5 gap-1.5 bg-white/[0.12] text-white ring-1 ring-white/15 shadow-[0_0_12px_rgba(255,255,255,0.08),inset_0_1px_1px_rgba(255,255,255,0.2)]'
+                                : 'px-2.5 max-md:px-3.5 gap-1.5 bg-neutral-900/[0.08] text-neutral-950 ring-1 ring-neutral-900/10 shadow-[inset_0_1px_1px_rgba(255,255,255,0.8),0_1px_2px_rgba(0,0,0,0.04)]'
                               : isDark
-                                ? 'w-7 text-neutral-400 hover:text-white hover:bg-white/[0.06]'
-                                : 'w-7 text-neutral-400 hover:text-neutral-800 hover:bg-neutral-900/[0.04]'
+                                ? 'w-7 max-md:w-8 text-neutral-400 hover:text-white hover:bg-white/[0.06]'
+                                : 'w-7 max-md:w-8 text-neutral-400 hover:text-neutral-800 hover:bg-neutral-900/[0.04]'
                           }`}
                           title={`${p.labelZh} (${p.label})`}
                         >
@@ -1871,6 +2157,13 @@ function SynhaleApp(): React.JSX.Element {
                           handleDuplicateSource(draggingModule.sourceId);
                         }
                       }}
+                      onClick={() => {
+                        if (!IS_TOUCH_DEVICE) return;
+                        if (draggingModule && draggingModule.kind === 'source') {
+                          handleDuplicateSource(draggingModule.sourceId);
+                          setDraggingModule(null);
+                        }
+                      }}
                       className={`flex-1 h-full min-h-[50px] max-h-[64px] rounded-lg border-2 flex items-center justify-center gap-2.5 px-3 transition-all duration-200 backdrop-blur-md cursor-pointer ${
                         hoveredHudBay === 'duplicate'
                           ? (isDark
@@ -1904,6 +2197,13 @@ function SynhaleApp(): React.JSX.Element {
                           handleDeleteSource(draggingModule.sourceId);
                         }
                       }}
+                      onClick={() => {
+                        if (!IS_TOUCH_DEVICE) return;
+                        if (draggingModule && draggingModule.kind === 'source') {
+                          handleDeleteSource(draggingModule.sourceId);
+                          setDraggingModule(null);
+                        }
+                      }}
                       className={`flex-1 h-full min-h-[50px] max-h-[64px] rounded-lg border-2 flex items-center justify-center gap-2.5 px-3 transition-all duration-200 backdrop-blur-md cursor-pointer ${
                         hoveredHudBay === 'delete'
                           ? (isDark
@@ -1935,6 +2235,17 @@ function SynhaleApp(): React.JSX.Element {
                         e.preventDefault();
                         e.stopPropagation();
                         setHoveredHudBay(null);
+                        if (draggingModule && draggingModule.kind === 'effect') {
+                          if (draggingModule.lane === 'staged') {
+                            setStagedEffectIds(prev => prev.filter(id => id !== draggingModule.effectId));
+                          } else {
+                            handleRemoveEffectFromLane(draggingModule.lane, draggingModule.effectId);
+                          }
+                          setDraggingModule(null);
+                        }
+                      }}
+                      onClick={() => {
+                        if (!IS_TOUCH_DEVICE) return;
                         if (draggingModule && draggingModule.kind === 'effect') {
                           if (draggingModule.lane === 'staged') {
                             setStagedEffectIds(prev => prev.filter(id => id !== draggingModule.effectId));
@@ -1984,6 +2295,19 @@ function SynhaleApp(): React.JSX.Element {
                           setDraggingModule(null);
                         }
                       }}
+                      onClick={() => {
+                        if (!IS_TOUCH_DEVICE) return;
+                        if (draggingModule && draggingModule.kind === 'effect') {
+                          if (draggingModule.lane === 'staged') {
+                            setStagedEffectIds(prev => prev.filter(id => id !== draggingModule.effectId));
+                            handleAddEffectToLane('laneA', draggingModule.effectId);
+                          } else {
+                            const targetLane = draggingModule.lane === 'laneA' ? 'laneB' : 'laneA';
+                            handleMoveEffectBetweenLanes(draggingModule.effectId, draggingModule.lane, targetLane);
+                          }
+                          setDraggingModule(null);
+                        }
+                      }}
                       className={`flex-1 h-full min-h-[50px] max-h-[64px] rounded-lg border-2 flex items-center justify-center gap-2.5 px-3 transition-all duration-200 backdrop-blur-md cursor-pointer ${
                         hoveredHudBay === 'switch'
                           ? (isDark
@@ -2015,6 +2339,13 @@ function SynhaleApp(): React.JSX.Element {
                         setHoveredHudBay(null);
                         if (draggingModule && draggingModule.kind === 'effect') {
                           handleStageEffect(draggingModule.effectId, draggingModule.lane);
+                        }
+                      }}
+                      onClick={() => {
+                        if (!IS_TOUCH_DEVICE) return;
+                        if (draggingModule && draggingModule.kind === 'effect') {
+                          handleStageEffect(draggingModule.effectId, draggingModule.lane);
+                          setDraggingModule(null);
                         }
                       }}
                       className={`flex-1 h-full min-h-[50px] max-h-[64px] rounded-lg border-2 flex items-center justify-center gap-2.5 px-3 transition-all duration-200 backdrop-blur-md cursor-pointer ${
@@ -2057,6 +2388,13 @@ function SynhaleApp(): React.JSX.Element {
                     handleStageEffect(draggingModule.effectId, draggingModule.lane);
                   }
                 }}
+                onClick={() => {
+                  if (!IS_TOUCH_DEVICE) return;
+                  if (draggingModule && draggingModule.kind === 'effect' && (draggingModule.lane === 'laneA' || draggingModule.lane === 'laneB')) {
+                    handleStageEffect(draggingModule.effectId, draggingModule.lane);
+                    setDraggingModule(null);
+                  }
+                }}
               >
                 <div
                   className={`flex-1 flex items-center gap-2.5 px-3 py-1.5 rounded-lg border backdrop-blur-md transition-all shadow-md overflow-x-auto ${
@@ -2097,6 +2435,16 @@ function SynhaleApp(): React.JSX.Element {
                           onDragEnd={() => {
                             setDraggingModule(null);
                             setHoveredHudBay(null);
+                          }}
+                          onClick={(e) => {
+                            if (!IS_TOUCH_DEVICE) return;
+                            if ((e.target as HTMLElement).closest('button')) return;
+                            e.stopPropagation();
+                            if (draggingModule?.kind === 'effect' && draggingModule.effectId === effId) {
+                              setDraggingModule(null);
+                              return;
+                            }
+                            setDraggingModule({ kind: 'effect', effectId: effId, lane: 'staged', effectName: rule.name });
                           }}
                           title="拖回 BUS 或点击装载"
                           className={`group flex items-center gap-1.5 px-2 py-1 rounded-md border text-xs font-mono font-semibold cursor-grab active:cursor-grabbing select-none transition-all duration-150 ${
@@ -2164,6 +2512,13 @@ function SynhaleApp(): React.JSX.Element {
                       e.preventDefault();
                       e.stopPropagation();
                       setHoveredHudBay(null);
+                      if (draggingModule && draggingModule.kind === 'effect' && draggingModule.lane === 'staged') {
+                        setStagedEffectIds(prev => prev.filter(id => id !== draggingModule.effectId));
+                        setDraggingModule(null);
+                      }
+                    }}
+                    onClick={() => {
+                      if (!IS_TOUCH_DEVICE) return;
                       if (draggingModule && draggingModule.kind === 'effect' && draggingModule.lane === 'staged') {
                         setStagedEffectIds(prev => prev.filter(id => id !== draggingModule.effectId));
                         setDraggingModule(null);
@@ -2276,6 +2631,19 @@ function SynhaleApp(): React.JSX.Element {
                 </div>
               </div>
 
+              <div
+                className="synhale-deck-zoom"
+                style={{
+                  // CSS transform scoped strictly to the deck console contents.
+                  // Width is pre-compensated by 1/scale so the scaled layout
+                  // exactly fills the outer container horizontally (no gutter,
+                  // no overflow) while vertical overflow is handled by the
+                  // parent scroll region.
+                  transform: `scale(${deckScale / 100})`,
+                  transformOrigin: 'top left',
+                  width: `${10000 / deckScale}%`
+                }}
+              >
               <HardwareDeck
                 channelStrip={channelStrip}
                 effects={effects}
@@ -2307,6 +2675,7 @@ function SynhaleApp(): React.JSX.Element {
                 onDeleteSource={handleDeleteSource}
                 onUnstageEffect={handleUnstageEffect}
               />
+              </div>
             </div>
           </div>
         </>
@@ -2778,6 +3147,8 @@ function SynhaleApp(): React.JSX.Element {
         onIndicatorPrecisionChange={handleIndicatorPrecisionChange}
         cycleTrackerSettings={cycleTrackerSettings}
         onCycleTrackerSettingsChange={handleCycleTrackerSettingsChange}
+        deckScale={deckScale}
+        onDeckScaleChange={handleDeckScaleChange}
         audioContext={audioEngineRef.current?.getContext()}
       />
     </div>
